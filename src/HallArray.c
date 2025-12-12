@@ -25,17 +25,20 @@
 #define CS4 7
 #define CS5 8
 
-#define IN0 (0x7 << 3)
-#define IN1 (0x6 << 3)
-#define IN2 (0x5 << 3)
-#define IN3 (0x0 << 3)
-#define IN4 (0x1 << 3)
-#define IN5 (0x2 << 3)
-#define IN6 (0x3 << 3)
-#define IN7 (0x4 << 3)
+
+#define IN0 (0x0 << 3)
+#define IN1 (0x1 << 3)
+#define IN2 (0x2 << 3)
+#define IN3 (0x3 << 3)
+#define IN4 (0x4 << 3)
+#define IN5 (0x7 << 3)
+#define IN6 (0x6 << 3)
+#define IN7 (0x5 << 3)
 
 static uint adc_buffer[BUFFER_SIZE];
-static const uint8_t input_ctrl[8] = {IN0, IN1, IN2, IN3, IN4, IN5, IN6, IN7};
+static const uint8_t input_ctrl[9] = {IN0, IN1, IN2, IN3, IN4, IN5, IN6, IN7, 0}; // Last entry is dummy for easier indexing
+static const uint8_t standard_map[8] = {3, 4, 5, 6, 7, 0, 1, 2};   // Map to physical order
+static const uint8_t short_map[8] = {0, 1, 2, 3, 0, 0, 0, 0};      // For last ADC (only 4 inputs used)
 static const uint8_t channel_ctrl[5] = {CS1, CS2, CS3, CS4, CS5};
 
 void spi_init_adc_bus(void){
@@ -66,13 +69,15 @@ uint16_t spi_transfer16(uint16_t tx){
 
 void main_task(__unused void *params) {
     uint16_t buff[2][40];
+    const uint8_t (*map)[8];
     bool toggle = false;    // Double buffer, probably need semaphore later
     printf("Entering main task\n");
     while(1) {
         for(int i = 0; i < 5; i++){
+            map = (i == 4) ? &short_map : &standard_map;
             gpio_put(channel_ctrl[i], 0);   // Activate ADC
             for(int j = 0; j < 8; j++){
-                buff[toggle][i*8 + j] = spi_transfer16((uint16_t)input_ctrl[j] << 8);
+                buff[toggle][i*8 + (*map)[j]] = spi_transfer16((uint16_t)input_ctrl[j + 1] << 8);    // Read input, request next, map to physical order
             }
             gpio_put(channel_ctrl[i], 1);   // Deactivate ADC
         }
