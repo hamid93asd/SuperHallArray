@@ -3,6 +3,8 @@ import serial
 import numpy as np
 import matplotlib.pyplot as plt
 import signal
+import pyqtgraph as pg
+from pyqtgraph.Qt import QtCore
 
 PORT = '/dev/tty.usbmodem14201'  # Serial port for Pico
 BAUD = 115200                   # Baud rate
@@ -10,6 +12,8 @@ BAUD = 115200                   # Baud rate
 ROWS = 6
 COLS = 6
 NCH = ROWS * COLS
+
+LOG_EPS = 1.0
 
 _running = True
 def handle_exit(signum, frame):
@@ -29,13 +33,20 @@ def main():
 
     data = np.zeros((ROWS, COLS))
 
-    plt.ion()
-    fig, ax = plt.subplots()
-    im = ax.imshow(data, vmin=0, vmax=4095, origin="lower", interpolation="nearest")
-    cbar = fig.colorbar(im, ax=ax)
-    cbar.set_label("Sensor value")
-    ax.set_title("magnetic Camera (6x6 Hall Array)")
-    plt.show()
+    app = pg.mkQApp("Mag Camera")
+
+    win = pg.GraphicsLayoutWidget(show=True, title="Magnetic Camera (6x6 Hall Array)")
+    win.resize(600, 600)
+
+    view = win.addViewBox(lockAspect=True)
+    img = pg.ImageItem()
+    view.addItem(img)
+    cmap = pg.colormap.get('CET-L4')
+    img.setLookupTable(cmap.getLookupTable())
+
+    # img.setLevels([np.log10(LOG_EPS), np.log10(4095 + LOG_EPS)])
+    img.setLevels([1024, 3072])
+    img.setAutoDownsample(True)
 
     print("Listening for frames.... Press Ctrl+C to exit.")
 
@@ -59,10 +70,10 @@ def main():
 
                 arr = np.array(vals, dtype=float).reshape((ROWS, COLS))
 
-                im.set_data(arr)
-
-                fig.canvas.draw_idle()
-                plt.pause(0.001)
+                log_arr = np.log10(arr + LOG_EPS)
+                # img.setImage(log_arr.T, autoLevels=False)
+                img.setImage(arr.T, autoLevels=False)
+                app.processEvents()
 
         except serial.SerialException:
             print("ERROR: Serial port disconnected:")
