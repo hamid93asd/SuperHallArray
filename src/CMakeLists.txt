@@ -17,6 +17,7 @@ target_link_libraries(hall_array PRIVATE
   pico_multicore
   pico_async_context_freertos
   FreeRTOS-Kernel-Heap4
+  NCC
   hardware_spi
 )
 
