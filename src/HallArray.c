@@ -2,15 +2,14 @@
 // Cubby DeBry 2025
 
 #include <stdio.h>
-
 #include "FreeRTOS.h"
 #include "task.h"
-
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "pico/cyw43_arch.h"
 #include "hardware/spi.h"
 #include "hardware/gpio.h"
+#include "NCC.h"
 
 #define BUFFER_SIZE 16
 
@@ -80,6 +79,13 @@ void main_task(__unused void *params) {
                 buff[toggle][i*8 + (*map)[j]] = spi_transfer16((uint16_t)input_ctrl[j + 1] << 8);    // Read input, request next, map to physical order
             }
             gpio_put(channel_ctrl[i], 1);   // Deactivate ADC
+        }
+
+        // Test NCC functions
+        overlap_t ov;
+        if (ncc_compute_overlap(1, 1, &ov)){
+            int32_t score = ncc_score(1, 1, buff[0], buff[1], &ov);
+            printf("NCC Score at shift (1,1): %ld\n", score);
         }
 
         // Print Frame (move to new task later)

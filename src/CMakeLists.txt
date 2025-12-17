@@ -1,6 +1,7 @@
 # This is the main binary. List your C files here.
 add_executable(hall_array
     HallArray.c
+    NCC.c
     )
 
 pico_set_program_name(hall_array "test")
@@ -17,7 +18,6 @@ target_link_libraries(hall_array PRIVATE
   pico_multicore
   pico_async_context_freertos
   FreeRTOS-Kernel-Heap4
-  NCC
   hardware_spi
 )
 

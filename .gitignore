@@ -1,9 +1,11 @@
 Testing
 build
 log
+.vscode
 
 *.log.*
 *-asciinema
 *.pid
 *-profile
 *.DS_Store
+
