@@ -68,9 +68,17 @@ uint16_t spi_transfer16(uint16_t tx){
 
 void main_task(__unused void *params) {
     uint16_t buff[2][40];
+    uint16_t *framePrev = buff[0];
+    uint16_t *frameCurr = buff[0];
+    int8_t dx[10];
+    int8_t dy[10];
     const uint8_t (*map)[8];
     bool toggle = false;    // Double buffer, probably need semaphore later
-    printf("Entering main task\n");
+    printf("Initializing...\n");
+    for(int i = 0; i < 10; i++){
+        dx[i] = 0;
+        dy[i] = 0;
+    }
     while(1) {
         for(int i = 0; i < 5; i++){
             map = (i == 4) ? &short_map : &standard_map;
@@ -82,11 +90,63 @@ void main_task(__unused void *params) {
         }
 
         // Test NCC functions
+        framePrev = frameCurr;
+        frameCurr = buff[toggle];
+        float high_score = 0;
+        int8_t high_u = 0;
+        int8_t high_v = 0;
         overlap_t ov;
-        if (ncc_compute_overlap(1, 1, &ov)){
-            int32_t score = ncc_score(1, 1, buff[0], buff[1], &ov);
-            printf("NCC Score at shift (1,1): %ld\n", score);
+
+        for(int u = -5; u < 6; u++){
+            for(int v = -5; v < 6; v++){
+                if(ncc_compute_overlap(u, v, &ov)){
+                    float score = ncc_score(u, v, framePrev, frameCurr, &ov);
+                    // printf("NCC Score at shift (%d,%d): %f\n", u, v, score);
+                    if(score > high_score){
+                        high_score = score;
+                        high_u = u;
+                        high_v = v;
+                    }
+                }
+            }
         }
+
+        // for(int i = 0; i < 9; i++){
+        //     dx[9 - i] = dx[8 - i];
+        //     dy[9 - i] = dy[8 - i];
+        // }
+
+        // dx[0] = high_u;
+        // dy[0] = high_v;
+
+        // int8_t tot_x = 0;
+        // int8_t tot_y = 0;
+
+        // for(int i = 0; i < 10; i++){
+        //     tot_x += dx[i];
+        //     tot_y += dy[i];
+        // }
+
+        // tot_x = (tot_x > 0) ? tot_x : -tot_x;
+        // tot_y = (tot_y > 0) ? tot_y : -tot_y;
+
+        // float d = sqrt(tot_x * tot_x + tot_y * tot_y);
+
+        // printf("Average Velocity: %f m/s\n", d * 0.020 / 0.05);  // 20mm per unit, 100ms per frame
+
+        // high_u = 0;
+        // high_v = 0;
+
+
+        // printf("High score at shift (%d,%d): %f\n", high_u, high_v, high_score);
+
+        // if (high_u != 0 || high_v != 0) {
+        //     printf("Shift Detected. Max Score: (%d, %d) Score: %f\n", high_u, high_v, high_score);
+        // }
+
+        // Simple velocity estimate
+
+
 
         // Print Frame (move to new task later)
         printf("F");
@@ -96,7 +156,7 @@ void main_task(__unused void *params) {
         printf("\n");
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, toggle);
         toggle = !toggle;
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 

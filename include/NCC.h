@@ -8,6 +8,7 @@
 #define ROWS 6
 #define COLS 6
 #define NCH (ROWS * COLS)
+#define MIN_OVERLAP 16
 
 extern const float TINY_EPS;
 
@@ -18,5 +19,5 @@ typedef struct {
 } overlap_t;
 
 bool ncc_compute_overlap(int8_t u, int8_t v, overlap_t *ov);
-int32_t ncc_score(int8_t u, int8_t v, uint16_t *A, uint16_t *B, overlap_t *ov);
+float ncc_score(int8_t u, int8_t v, uint16_t *A, uint16_t *B, overlap_t *ov);
 

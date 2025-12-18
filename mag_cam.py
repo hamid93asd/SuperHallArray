@@ -6,7 +6,7 @@ import signal
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore
 
-PORT = '/dev/tty.usbmodem14201'  # Serial port for Pico
+PORT = '/dev/tty.usbmodem14101'  # Serial port for Pico
 BAUD = 115200                   # Baud rate
 
 ROWS = 6
