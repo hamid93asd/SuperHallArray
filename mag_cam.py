@@ -50,22 +50,16 @@ def main():
 
     while _running and win.isVisible():
         try:
-            line = ser.readline().decode(errors="ignore").strip()
-            if not line:
-                app.processEvents()
+            # Look for start word
+            if ser.read(1) != b'\xFF':
                 continue
 
-            parts = line.split(",")
-            if parts[0] != 'F':
-                continue
-            if len(parts) != NCH + 1:
-                continue
-
-            try:
-                vals = [int(p) for p in parts[1:]]
-            except ValueError:
+            # Read frame
+            data = ser.read(72)  # 36 channels * 2 bytes each
+            if len(data) != 72:
                 continue
 
+            vals = struct.unpack('<36H', data)
             arr = np.array(vals, dtype=float).reshape((ROWS, COLS))
 
             # Update baseline and compute deviation

@@ -14,6 +14,7 @@
 #define BUFFER_SIZE 16
 #define FPS 40
 #define FRAME_DELAY_MS (1000 / FPS)
+#define DEBUG_MODE 0
 
 #define SPI_PORT spi0
 #define PIN_MISO 0
@@ -60,8 +61,21 @@ void spi_init_adc_bus(void){
 void send_frame_binary(uint16_t* frame){
     uint8_t header = 0xFF;
     printf("%c", header);
-    fwrite(frame, sizeof(uint16_t), 36, stdout);
+    
+    for(int i = 0; i < 36; i++){
+        uint8_t high = (frame[i] >> 8) & 0xFF;
+        uint8_t low = frame[i] & 0xFF;
+        printf("%c%c", low, high);
+    }
     fflush(stdout);
+}
+
+void send_frame_csv(uint16_t* frame){
+    printf("F");
+    for(int i = 0; i < 36; i++){
+        printf(",%4u", frame[i]);
+    }
+    printf("\n");
 }
 
 uint16_t spi_transfer16(uint16_t tx){
@@ -180,8 +194,12 @@ void main_task(__unused void *params) {
 
 
 
-        // Print Frame (move to new task later)
-        send_frame_binary(frameCurr);
+        #if (DEBUG_MODE)
+            send_frame_csv(frameCurr);
+        #else
+            send_frame_binary(frameCurr);
+        #endif
+
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, toggle);
         toggle = !toggle;
     }
