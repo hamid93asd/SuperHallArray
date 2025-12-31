@@ -12,7 +12,7 @@
 #include "NCC.h"
 
 #define BUFFER_SIZE 16
-#define FPS 40
+#define FPS 60
 #define FRAME_DELAY_MS (1000 / FPS)
 #define DEBUG_MODE 0
 
@@ -44,7 +44,7 @@ static const uint8_t short_map[8] = {0, 1, 2, 3, 0, 0, 0, 0};      // For last A
 static const uint8_t channel_ctrl[5] = {CS1, CS2, CS3, CS4, CS5};
 
 void spi_init_adc_bus(void){
-    spi_init(SPI_PORT, 1 * 1000 * 1000); // 1 MHz
+    spi_init(SPI_PORT, 3.2 * 1000 * 1000); // 3.2 MHz
     spi_set_format(SPI_PORT, 8, SPI_CPOL_0, SPI_CPHA_1, SPI_MSB_FIRST);
 
     gpio_set_function(PIN_MISO, GPIO_FUNC_SPI);
@@ -59,14 +59,9 @@ void spi_init_adc_bus(void){
 }
 
 void send_frame_binary(uint16_t* frame){
-    uint8_t header = 0xFF;
-    printf("%c", header);
-    
-    for(int i = 0; i < 36; i++){
-        uint8_t high = (frame[i] >> 8) & 0xFF;
-        uint8_t low = frame[i] & 0xFF;
-        printf("%c%c", low, high);
-    }
+    uint8_t sync[4] = {0xAA, 0x55, 0xAA, 0x55};
+    fwrite(sync, 1, 4, stdout);
+    fwrite(frame, sizeof(uint16_t), 36, stdout);
     fflush(stdout);
 }
 
@@ -131,8 +126,8 @@ void main_task(__unused void *params) {
         dy[i] = 0;
     }
     while(1) {
-        // super_frame(frameCurr, 100);
-        get_frame(frameCurr); // Single frame for testing
+        super_frame(frameCurr, 50);
+        // get_frame(frameCurr); // Single frame for testing
         vTaskDelay(pdMS_TO_TICKS(FRAME_DELAY_MS));
 
         // Test NCC functions
