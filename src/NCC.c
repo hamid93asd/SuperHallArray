@@ -14,7 +14,7 @@ bool ncc_compute_overlap(int8_t u, int8_t v, overlap_t *ov){
     ov->c1B = (COLS - u > COLS) ? COLS : COLS - u; 
 
     ov->N = (ov->r1A - ov->r0A) * (ov->c1A - ov->c0A);  // Number of overlapping pixels
-    return ((ov->N >= MIN_OVERLAP) ? true : false);               // Require at least MIN_OVERLAP overlapping pixels
+    return ((ov->N >= MIN_OVERLAP) ? true : false);     // Require at least MIN_OVERLAP overlapping pixels
 }
 
 
@@ -25,8 +25,8 @@ float ncc_score(int8_t u, int8_t v, uint16_t *A, uint16_t *B, overlap_t *ov){
 
     for (int r = 0; r < (ov->r1A - ov->r0A); r++){
         for (int c = 0; c < (ov->c1A - ov->c0A); c++){
-            uint16_t a = A[(ov->r0A + r) * COLS + (ov->c0A + c)];
-            uint16_t b = B[(ov->r0B + r) * COLS + (ov->c0B + c)];
+            uint32_t a = A[(ov->r0A + r) * COLS + (ov->c0A + c)];
+            uint32_t b = B[(ov->r0B + r) * COLS + (ov->c0B + c)];
 
             sumA += a;
             sumB += b;

@@ -2,6 +2,7 @@
 add_executable(hall_array
     HallArray.c
     NCC.c
+    usb_descriptors.c
     )
 
 pico_set_program_name(hall_array "test")
@@ -10,12 +11,14 @@ pico_set_program_version(hall_array "0.1")
 # Modify the below lines to enable/disable output over UART/USB.
 # These are mutually exclusive, only set one.
 pico_enable_stdio_uart(hall_array 0)
-pico_enable_stdio_usb(hall_array 1)
+pico_enable_stdio_usb(hall_array 0)
 
 # Add the libraries to the build
 target_link_libraries(hall_array PRIVATE
   pico_stdlib
   pico_multicore
+  pico_stdio_usb_headers
+  tinyusb_device
   pico_async_context_freertos
   FreeRTOS-Kernel-Heap4
   hardware_spi

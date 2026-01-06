@@ -2,14 +2,14 @@ import sys
 import serial
 import signal
 import struct
-import time
+import time as time_module
 import numpy as np
 import pyqtgraph as pg
 from time import time
 from scipy.ndimage import gaussian_filter
 
-PORT = '/dev/tty.usbmodem14201'  # Serial port for Pico
-BAUD = 115200                   # Baud rate
+PORT = '/dev/tty.usbmodemPICO1'  # Serial port for Pico
+BAUD = 921600                   # Baud rate
 ROWS = 6
 COLS = 6
 FRAME_WORDS = ROWS * COLS
@@ -17,15 +17,17 @@ SYNC = b"\xAA\x55\xAA\x55"
 SYNC_LEN = len(SYNC)
 FRAME_BYTES = FRAME_WORDS * 2 + SYNC_LEN
 PAYLOAD_BYTES = FRAME_WORDS * 2
-ALPHA = 0.98
-DEVIATION_RANGE = 20
-UI_FPS = 60
+TIME_CONSTANT = .5  # seconds
+DEVIATION_RANGE = 200
+UI_FPS = 90
+ALPHA = 1 - (1 / (TIME_CONSTANT * UI_FPS))
+SIGMA = 0.0
 _UI_DT = 1.0 / UI_FPS
 
 
 rx = bytearray()
 _running = True
-baseline = np.full((ROWS, COLS), 2048.0)
+baseline = np.full((ROWS, COLS), 32768.0)
 
 _last_ui = 0.0
 _last_ev_idle = 0.0
@@ -37,6 +39,7 @@ _acc_math = 0.0
 _acc_filt = 0.0
 _acc_img = 0.0
 _acc_ev = 0.0
+_reads = 0
 
 def handle_exit(signum, frame):
     global _running
@@ -48,17 +51,17 @@ signal.signal(signal.SIGTERM, handle_exit)
 def open_serial():
     while _running:
         try:
-            ser = serial.Serial(PORT, BAUD, timeout=0.05)
+            ser = serial.Serial(PORT, BAUD, timeout=0.0001)
             ser.reset_input_buffer()
             print("Serial connected.")
             return ser
         except Exception as e:
             print("Waiting for serial connection...")
-            time.sleep(1)
+            time_module.sleep(1)
         
-def read_frame(ser, max_scan_frames=32, max_buffer=16384):
+def read_frame(ser, max_scan_frames=2, max_buffer=2048):
     """Read one frame with validation"""
-    global rx
+    global rx, _reads
 
     chunk = ser.read(max(1, ser.in_waiting))
 
@@ -82,28 +85,31 @@ def read_frame(ser, max_scan_frames=32, max_buffer=16384):
         if i > 0:           # Discard data before sync
             del rx[:i]
 
+        if rx[:SYNC_LEN] != SYNC:
+            del rx[:1]
+            return None
+
+
         if len(rx) < FRAME_BYTES:       # Not enough data yet
-            need = FRAME_BYTES - len(rx)
-            more = ser.read(need)
-            if more:
-                rx.extend(more)
-            if len(rx) < FRAME_BYTES:
-                return None
+            return None
+
         
         payload = bytes(rx[SYNC_LEN:SYNC_LEN + PAYLOAD_BYTES])
+        _reads += 1
         del rx[:FRAME_BYTES]
         vals = struct.unpack(f'<{FRAME_WORDS}H', payload)
 
-        if any(v > 4095 for v in vals):
+        if any(v > 65535 for v in vals):
             attempts += 1
-            continue
+            print("Passing rejected frame with invalid data.")
+            # continue
 
         return np.array(vals, dtype=float).reshape((ROWS, COLS))
     return None
 
 
 def main():
-    global _running, baseline, _acc_math, _acc_read, _acc_filt, _acc_img, _acc_ev, _n_frames, t_last_report, _last_ui, _n_ui, _last_ev_idle
+    global _running, baseline, _acc_math, _acc_read, _acc_filt, _acc_img, _acc_ev, _n_frames, t_last_report, _last_ui, _n_ui, _last_ev_idle, _reads
     t_i0 = t_i1 = t_ev0 = t_ev1 = 0.0
 
     ser = open_serial()
@@ -125,7 +131,7 @@ def main():
 
     print("Listening for frames.... Press Ctrl+C to exit.")
 
-    while _running and win.isVisible():
+    while _running & win.isVisible():
         try:
             t0 = time()
             arr = read_frame(ser)
@@ -142,13 +148,13 @@ def main():
 
             # Update baseline and compute deviation
             t_m0 = time()
-            baseline = ALPHA * baseline + (1 - ALPHA) * arr
             deviation = arr - baseline
+            baseline = ALPHA * baseline + (1 - ALPHA) * arr
             t_m1 = time()
 
             # Gaussian smoothing
             t_f0 = time()
-            deviation = gaussian_filter(deviation, sigma=0.8)
+            # deviation = gaussian_filter(deviation, sigma=SIGMA)
             t_f1 = time()
 
             now = time()
@@ -178,13 +184,14 @@ def main():
                 print(
                     f"FPS={fps:6.1f} "
                     f"read={(_acc_read/_n_frames)*1000:5.2f}ms "
+                    f"reads/sec={(_reads/_n_frames)*1000:5.2f} "
                     f"math={(_acc_math/_n_frames)*1000:5.2f}ms "
                     f"gauss={(_acc_filt/_n_frames)*1000:5.2f}ms "
                     f"img={(_acc_img/_n_frames)*1000:5.2f}ms "
                     f"events={(_acc_ev/max(1,_n_ui))*1000:5.2f}ms/ui"
                 )
                 t_last_report = now
-                _n_frames = _n_ui = 0
+                _n_frames = _n_ui = _reads = 0
                 _acc_read = _acc_math = _acc_filt = _acc_img = _acc_ev = 0.0
 
         except serial.SerialException as e:
