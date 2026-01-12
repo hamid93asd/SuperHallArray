@@ -19,5 +19,5 @@ typedef struct {
 } overlap_t;
 
 bool ncc_compute_overlap(int8_t u, int8_t v, overlap_t *ov);
-float ncc_score(int8_t u, int8_t v, uint16_t *A, uint16_t *B, overlap_t *ov);
+float ncc_score(int8_t u, int8_t v, int32_t *A, int32_t *B, overlap_t *ov);
 

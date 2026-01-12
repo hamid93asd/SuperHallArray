@@ -18,15 +18,15 @@ bool ncc_compute_overlap(int8_t u, int8_t v, overlap_t *ov){
 }
 
 
-float ncc_score(int8_t u, int8_t v, uint16_t *A, uint16_t *B, overlap_t *ov){
+float ncc_score(int8_t u, int8_t v, int32_t *A, int32_t *B, overlap_t *ov){
 
     int32_t sumA = 0, sumB = 0;
     int64_t sumAA = 0, sumBB = 0, sumAB = 0;
 
     for (int r = 0; r < (ov->r1A - ov->r0A); r++){
         for (int c = 0; c < (ov->c1A - ov->c0A); c++){
-            uint32_t a = A[(ov->r0A + r) * COLS + (ov->c0A + c)];
-            uint32_t b = B[(ov->r0B + r) * COLS + (ov->c0B + c)];
+            int32_t a = A[(ov->r0A + r) * COLS + (ov->c0A + c)];
+            int32_t b = B[(ov->r0B + r) * COLS + (ov->c0B + c)];
 
             sumA += a;
             sumB += b;

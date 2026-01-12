@@ -5,18 +5,21 @@
 #include "tusb.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "pico.h"
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "pico/cyw43_arch.h"
 #include "hardware/spi.h"
 #include "hardware/gpio.h"
 #include "NCC.h"
+#include "pico/time.h"
 
 #define BUFFER_SIZE 16
 #define FPS 60
 #define FRAME_DELAY_MS (1000 / FPS)
 #define DEBUG_MODE 0    // 0 = Binary output, 1 = CSV debug output
-#define ARRAY_MODE 1    // 0 = Camera Mode, 1 = Motion Tracker Mode
+#define ARRAY_MODE 2    // 0 = Camera Mode, 1 = Motion Tracker Mode, 2 = Ensemble Mode
+#define ALPHA 0.005f    // Baseline update factor
 
 #define SPI_PORT spi0
 #define PIN_MISO 0
@@ -123,20 +126,20 @@ void get_frame(uint16_t* frame){
 }
 
 // Get one super sampled frame by averaging n_frames
-void super_frame(uint16_t* s_frame, uint8_t n_frames){
-    uint64_t frame_total[36] = {0};
+void super_frame(uint32_t* s_frame, uint8_t n_frames){
+    uint32_t frame_total[36] = {0};
 
     for(int i = 0; i < n_frames; i++){
         uint16_t frame[36];
         get_frame(frame);
         for(int j = 0; j < 36; j++){
-            frame_total[j] += frame[j] << 4;    // Multiply by 16 for better averaging precision
+            frame_total[j] += (uint32_t)frame[j];
         }
         // vTaskDelay(pdMS_TO_TICKS(FRAME_DELAY_MS/n_frames));
     }
 
     for(int i = 0; i < 36; i++){
-        s_frame[i] = frame_total[i] / n_frames;
+        s_frame[i] = (uint32_t)((((uint64_t)frame_total[i]) << 20) / n_frames);
     }
 }
 
@@ -150,30 +153,37 @@ void tud_update_task(void* params){
 // Magnetic Camera Task
 void cam_task(void* params){
     bool toggle = false;
-    uint16_t frame[36];
-    uint16_t *frameCurr = frame;
+    uint32_t frame[36];
+    uint16_t send[36];
 
     while(1) {
-        super_frame(frameCurr, 64);
-        vTaskDelay(pdMS_TO_TICKS(FRAME_DELAY_MS));  // This still needs timing, should be delay FRAME_DELAY_MS minus frame read time
+        // get_frame(frame);
+        super_frame(frame, 64);
+        for(int i = 0; i < 36; i++){
+            send[i] = (uint16_t)(frame[i] >> 20);
+        }
     
         #if (DEBUG_MODE)
-            send_frame_csv(frameCurr);
+            send_frame_csv(send);
         #else   
-            send_frame_binary(frameCurr);
+            send_frame_binary(send);
         #endif
 
-        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, toggle);
+        vTaskDelay(pdMS_TO_TICKS(FRAME_DELAY_MS));  // This still needs timing, should be delay FRAME_DELAY_MS minus frame read time
+        // cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, toggle);
         toggle = !toggle;
     }
 }
 
 // Normalized Cross-Correlation Velocity Task
 void vel_task(__unused void *params) {
-    uint16_t frameA[36];
-    uint16_t frameB[36];
-    uint16_t *framePrev = frameA;
-    uint16_t *frameCurr = frameB;
+    const float alpha = ALPHA;  // Baseline update factor
+    uint16_t frameBase[36];
+    uint16_t frameCurr[36];
+    uint32_t temp[36];
+    int32_t frameDevCurr[36];
+    int32_t frameDevPrev[36];
+
     int8_t dx[10];
     int8_t dy[10];
     const uint8_t (*map)[8];
@@ -185,23 +195,23 @@ void vel_task(__unused void *params) {
     }
 
     while(1) {
-        uint16_t *temp = framePrev;
-        framePrev = frameCurr;
-        frameCurr = temp;
-        super_frame(frameCurr, 40); // Update frame
+        super_frame(temp, 40); // Update frame
+
+        for(int i = 0; i < 36; i++){
+            frameCurr[i] = (uint16_t)temp[i];
+            frameDevCurr[i] = frameCurr[i] - frameBase[i];
+        }
         
         float high_score = 0;
         int8_t high_u = 0;
         int8_t high_v = 0;
         overlap_t ov;
-        int itt = 0;
 
         for(int u = -5; u < 6; u++){
             for(int v = -5; v < 6; v++){
-                itt++;
                 ncc_compute_overlap(u, v, &ov);
                 if(ncc_compute_overlap(u, v, &ov)){
-                    float score = ncc_score(u, v, framePrev, frameCurr, &ov);
+                    float score = ncc_score(u, v, frameDevPrev, frameDevCurr, &ov);
                     // tud_printf("NCC Score at shift (%d,%d): %f\n", u, v, score);
                     if(score > high_score){
                         high_score = score;
@@ -236,12 +246,61 @@ void vel_task(__unused void *params) {
         // tud_printf("Average Velocity: %f m/s\n", d * 0.020 / 0.05);  // 20mm per unit, 100ms per frame
         // tud_printf("High score at shift (%d,%d): %f\n", high_u, high_v, high_score);
 
-        if (high_u != 0 || high_v != 0) {
+        if ((high_u != 0 || high_v != 0) && high_score > 0.75f) {
             tud_printf("Shift Detected. Max Score: (%d, %d) Score: %f\n", high_u, high_v, high_score);
         }
 
-        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, toggle);
+        // send_frame_csv(frameBase);  // Debug
+
+        for(int i = 0; i < 36; i++){
+            frameBase[i] = (uint16_t)(alpha * frameCurr[i] + (1 - alpha) * frameBase[i]);
+            frameDevPrev[i] = frameDevCurr[i];
+        }
+
+        // cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, toggle);
         toggle = !toggle;
+        vTaskDelay(pdMS_TO_TICKS(FRAME_DELAY_MS));
+    }
+}
+
+// Magnetic Array Ensemble Averaging
+void avg_task(void* params){
+    uint32_t raw;
+    uint32_t spatial;
+    uint32_t temporal;
+    uint32_t combined;
+    uint32_t comb_avg;
+    uint64_t temp = 0;
+
+    uint16_t frame[36];
+    uint32_t s_frame[36];
+
+    while(1){
+        // Update readings
+        get_frame(frame);           // Raw frame (12 bit)
+        super_frame(s_frame, 64);   // Super sampled frame (32 bit)
+        raw = ((uint32_t)frame[15]) << 20;
+
+        // Compute spatial average
+        for(int i = 0; i < 36; i++){
+            temp += (uint64_t)(((uint32_t)frame[i]) << 20);
+        }
+        spatial = (uint32_t)(temp/36);
+
+        // Read temporal average
+        temporal = s_frame[15];
+
+        // Sum combined average
+        temp = 0;
+        for(int i = 0; i < 36; i++){
+            temp += (uint64_t)s_frame[i];
+        }
+        combined = (uint32_t)(temp/36);
+
+        temp = 0;
+
+        // Send results
+        tud_printf("%u, %u, %u, %u\n", raw, spatial, temporal, combined);
         vTaskDelay(pdMS_TO_TICKS(FRAME_DELAY_MS));
     }
 }
@@ -249,7 +308,7 @@ void vel_task(__unused void *params) {
 int main(void)
 {
     stdio_init_all();
-    cyw43_arch_init();
+    // cyw43_arch_init();
     tusb_init();
     spi_init_adc_bus();
 
@@ -262,8 +321,11 @@ int main(void)
     #if (ARRAY_MODE == 0)
         xTaskCreate(cam_task, "Thread",
                     configMINIMAL_STACK_SIZE, NULL, tskIDLE_PRIORITY + 2, &readtask);
-    #else
+    #elif (ARRAY_MODE == 1)
         xTaskCreate(vel_task, "Thread",
+                    configMINIMAL_STACK_SIZE, NULL, tskIDLE_PRIORITY + 2, &readtask);
+    #elif (ARRAY_MODE == 2)
+        xTaskCreate(avg_task, "Thread",
                     configMINIMAL_STACK_SIZE, NULL, tskIDLE_PRIORITY + 2, &readtask);
     #endif
 
