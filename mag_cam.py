@@ -6,7 +6,7 @@ import time as time_module
 import numpy as np
 import pyqtgraph as pg
 from time import time
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, uniform_filter
 
 PORT = '/dev/tty.usbmodemPICO1'  # Serial port for Pico
 BAUD = 921600                   # Baud rate
@@ -17,8 +17,8 @@ SYNC = b"\xAA\x55\xAA\x55"
 SYNC_LEN = len(SYNC)
 FRAME_BYTES = FRAME_WORDS * 2 + SYNC_LEN
 PAYLOAD_BYTES = FRAME_WORDS * 2
-TIME_CONSTANT = .5  # seconds
-DEVIATION_RANGE = 200
+TIME_CONSTANT = 1  # seconds
+DEVIATION_RANGE = 10 * 16 # 12 bit ADC count range * Q4
 UI_FPS = 90
 ALPHA = 1 - (1 / (TIME_CONSTANT * UI_FPS))
 SIGMA = 0.0
@@ -152,9 +152,10 @@ def main():
             baseline = ALPHA * baseline + (1 - ALPHA) * arr
             t_m1 = time()
 
-            # Gaussian smoothing
+            # Smoothing
             t_f0 = time()
             # deviation = gaussian_filter(deviation, sigma=SIGMA)
+            # deviation = uniform_filter(deviation, size=2, mode='nearest')
             t_f1 = time()
 
             now = time()

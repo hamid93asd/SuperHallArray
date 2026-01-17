@@ -18,8 +18,10 @@
 #define FPS 60
 #define FRAME_DELAY_MS (1000 / FPS)
 #define DEBUG_MODE 0    // 0 = Binary output, 1 = CSV debug output
-#define ARRAY_MODE 2    // 0 = Camera Mode, 1 = Motion Tracker Mode, 2 = Ensemble Mode
+#define ARRAY_MODE 1    // 0 = Camera Mode, 1 = Motion Tracker Mode, 2 = Ensemble Mode
 #define ALPHA 0.005f    // Baseline update factor
+#define HISTORY_LENGTH 2 // Number of historical frames for frame shifting
+#define VELOCITY_FRAMES 5   // Averaging period for velocity
 
 #define SPI_PORT spi0
 #define PIN_MISO 0
@@ -160,7 +162,7 @@ void cam_task(void* params){
         // get_frame(frame);
         super_frame(frame, 64);
         for(int i = 0; i < 36; i++){
-            send[i] = (uint16_t)(frame[i] >> 20);
+            send[i] = (uint16_t)(frame[i] >> 16);
         }
     
         #if (DEBUG_MODE)
@@ -178,53 +180,65 @@ void cam_task(void* params){
 // Normalized Cross-Correlation Velocity Task
 void vel_task(__unused void *params) {
     const float alpha = ALPHA;  // Baseline update factor
-    uint16_t frameBase[36];
-    uint16_t frameCurr[36];
+    uint32_t frameBase[36];
+    uint32_t frameCurr[36];
     uint32_t temp[36];
     int32_t frameDevCurr[36];
     int32_t frameDevPrev[36];
+    int32_t frameHistory[HISTORY_LENGTH * 36]; // replace devCurr and devPrev
 
-    int8_t dx[10];
-    int8_t dy[10];
-    const uint8_t (*map)[8];
+    int8_t dx[VELOCITY_FRAMES];
+    int8_t dy[VELOCITY_FRAMES];
     bool toggle = false;
 
-    for(int i = 0; i < 10; i++){
+    for(int i = 0; i < VELOCITY_FRAMES; i++){
         dx[i] = 0;
         dy[i] = 0;
+    }
+
+    for(int i = 0; i < 36; i++){
+        frameBase[i] = 2048 << 20;
+    }
+
+    // Initialize frameHistory to zeros
+    for(int i = 0; i < HISTORY_LENGTH * 36; i++){
+        frameHistory[i] = 0;
     }
 
     while(1) {
         super_frame(temp, 40); // Update frame
 
         for(int i = 0; i < 36; i++){
-            frameCurr[i] = (uint16_t)temp[i];
-            frameDevCurr[i] = frameCurr[i] - frameBase[i];
+            frameCurr[i] = temp[i];
+            frameHistory[0 * 36 + i] = frameCurr[i] - frameBase[i];
         }
         
-        float high_score = 0;
+        uint64_t high_score = 0;
+        int8_t high_frame = 0;
         int8_t high_u = 0;
         int8_t high_v = 0;
         overlap_t ov;
 
-        for(int u = -5; u < 6; u++){
-            for(int v = -5; v < 6; v++){
-                ncc_compute_overlap(u, v, &ov);
-                if(ncc_compute_overlap(u, v, &ov)){
-                    float score = ncc_score(u, v, frameDevPrev, frameDevCurr, &ov);
-                    // tud_printf("NCC Score at shift (%d,%d): %f\n", u, v, score);
-                    if(score > high_score){
-                        high_score = score;
-                        high_u = u;
-                        high_v = v;
+        for(int i = 1; i < HISTORY_LENGTH; i++){
+            for(int u = -3; u < 4; u++){
+                for(int v = -3; v < 4; v++){
+                    if(ncc_compute_overlap(u, v, &ov)){
+                        uint64_t score = ncc_score(u, v, &frameHistory[i * 36], &frameHistory[0 * 36], &ov);
+                        // tud_printf("NCC Score at frame: %d, shift (%d,%d): %lld\n", i, u, v, score);
+                        if(score > high_score){
+                            high_score = score;
+                            high_frame = i;
+                            high_u = u;
+                            high_v = v;
+                        }
                     }
                 }
             }
         }
 
-        for(int i = 0; i < 9; i++){
-            dx[9 - i] = dx[8 - i];
-            dy[9 - i] = dy[8 - i];
+        for(int i = VELOCITY_FRAMES - 1; i > 0; i--){
+            dx[i] = dx[i - 1];
+            dy[i] = dy[i - 1];
         }
 
         dx[0] = high_u;
@@ -233,28 +247,30 @@ void vel_task(__unused void *params) {
         int8_t tot_x = 0;
         int8_t tot_y = 0;
 
-        for(int i = 0; i < 10; i++){
-            tot_x += dx[i];
-            tot_y += dy[i];
+        for(int i = 0; i < VELOCITY_FRAMES; i++){
+            tot_x += (dx[i] > 0) ? dx[i] : -dx[i];
+            tot_y += (dy[i] > 0) ? dy[i] : -dy[i];
         }
 
-        tot_x = (tot_x > 0) ? tot_x : -tot_x;
-        tot_y = (tot_y > 0) ? tot_y : -tot_y;
+        // uint64_t d = sqrt(tot_x * tot_x + tot_y * tot_y);
 
-        float d = sqrt(tot_x * tot_x + tot_y * tot_y);
-
-        // tud_printf("Average Velocity: %f m/s\n", d * 0.020 / 0.05);  // 20mm per unit, 100ms per frame
+        // uint64_t vel = d * 20 / (10 * FRAME_DELAY_MS);  // mm/ms -> m/s
         // tud_printf("High score at shift (%d,%d): %f\n", high_u, high_v, high_score);
 
-        if ((high_u != 0 || high_v != 0) && high_score > 0.75f) {
-            tud_printf("Shift Detected. Max Score: (%d, %d) Score: %f\n", high_u, high_v, high_score);
+        if (high_u != 0 || high_v != 0) {
+            tud_printf("Shift Detected. Frame: n-%d Max Score: (%d, %d) Score: %lld, Average Velocity: m/s\n", high_frame, high_u, high_v, high_score);
         }
 
-        // send_frame_csv(frameBase);  // Debug
-
         for(int i = 0; i < 36; i++){
-            frameBase[i] = (uint16_t)(alpha * frameCurr[i] + (1 - alpha) * frameBase[i]);
-            frameDevPrev[i] = frameDevCurr[i];
+            int32_t del = frameCurr[i] - frameBase[i];
+            frameBase[i] += (del * 5) >> 10;
+            // tud_printf("%d, ", frameBase[i] >> 20);
+        }
+
+        for(int i = HISTORY_LENGTH - 1; i > 0; i--){
+            for(int j = 0; j < 36; j++){
+                frameHistory[(i * 36) + j] = frameHistory[((i - 1) * 36) + j];
+            }
         }
 
         // cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, toggle);
@@ -323,7 +339,7 @@ int main(void)
                     configMINIMAL_STACK_SIZE, NULL, tskIDLE_PRIORITY + 2, &readtask);
     #elif (ARRAY_MODE == 1)
         xTaskCreate(vel_task, "Thread",
-                    configMINIMAL_STACK_SIZE, NULL, tskIDLE_PRIORITY + 2, &readtask);
+                    2048 * 10, NULL, tskIDLE_PRIORITY + 2, &readtask);
     #elif (ARRAY_MODE == 2)
         xTaskCreate(avg_task, "Thread",
                     configMINIMAL_STACK_SIZE, NULL, tskIDLE_PRIORITY + 2, &readtask);
