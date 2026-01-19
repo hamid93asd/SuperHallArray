@@ -25,46 +25,51 @@ uint64_t ncc_score(int8_t u, int8_t v, int32_t *A, int32_t *B, overlap_t *ov){
 
     for (int r = 0; r < (ov->r1A - ov->r0A); r++){
         for (int c = 0; c < (ov->c1A - ov->c0A); c++){
-            int32_t a0 = A[(ov->r0A + r) * COLS + (ov->c0A + c)];
-            int32_t b0 = B[(ov->r0B + r) * COLS + (ov->c0B + c)];
-
-            int64_t a = ((int64_t)a0) >> NCC_IN_SHIFT;
-            int64_t b = ((int64_t)b0) >> NCC_IN_SHIFT;
+            int64_t a = A[(ov->r0A + r) * COLS + (ov->c0A + c)];
+            int64_t b = B[(ov->r0B + r) * COLS + (ov->c0B + c)];
 
             sumA += a;
             sumB += b;
             sumAA += a * a;
-            sumBB +=b * b;
-            sumAB +=a * b;
+            sumBB += b * b;
+            sumAB += a * b;
         }
     }
 
     // Need to benchmark, PICO doesn't have hardware float
 
     int64_t N = (int64_t)(ov->N);
+    int64_t crossAA = (sumA * sumA); // >> 20;
+    int64_t crossBB = (sumB * sumB); // >> 20;
+    int64_t crossAB = (sumA * sumB); // >> 20;
+    
+    sumAA = sumAA; // >> 20;
+    sumBB = sumBB; // >> 20;
+    sumAB = sumAB; // >> 20;
 
-    int64_t num = N * sumAB - (sumA * sumB);
-    int64_t denA = N * sumAA - (sumA * sumA);
-    int64_t denB = N * sumBB - (sumB * sumB);
-
-    num = num >> 20;
-    denA = denA >> 20;
-    denB = denB >> 20;
+    int64_t num = (N * sumAB - crossAB);
+    int64_t denA = (N * sumAA - crossAA);
+    int64_t denB = (N * sumBB - crossBB);
 
     if (denA <= 0 || denB <= 0){
         return 0;
     }
+
     num = (num > 0) ? num : -num;
-    uint64_t num2 = num * num;
-    uint64_t den = denA * denB;
-    // num2 = num2 >> 20;
-    den = den >> 20;
 
+    num = num >> 30;    // Eliminates all fractional bits :( Q0
+    denA = denA >> 40;
+    denB = denB >> 40;
+
+    uint64_t num2 = (num * num);
+    uint64_t den = (denA * denB); // was >> 20, as written returns 0s
     
+    // uint64_t score = (uint64_t)(num2 / den);
     uint64_t score = num2 / den;
-    // float s = (float)(num2) / (float)(den);
 
-    // tud_printf("num2: %llu, den: %llu, float score: %f\n", num2, den, s);
+    if (u == 0 && v == 0){
+        tud_printf("(0, 0) Score: %llu\n", score);
+    }
     return score;
 }
 

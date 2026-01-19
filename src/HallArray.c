@@ -19,7 +19,7 @@
 #define FRAME_DELAY_MS (1000 / FPS)
 #define DEBUG_MODE 0    // 0 = Binary output, 1 = CSV debug output
 #define ARRAY_MODE 1    // 0 = Camera Mode, 1 = Motion Tracker Mode, 2 = Ensemble Mode
-#define ALPHA 0.005f    // Baseline update factor
+#define ALPHA 5         // Baseline update factor, ALPHA/1024
 #define HISTORY_LENGTH 2 // Number of historical frames for frame shifting
 #define VELOCITY_FRAMES 5   // Averaging period for velocity
 
@@ -179,13 +179,13 @@ void cam_task(void* params){
 
 // Normalized Cross-Correlation Velocity Task
 void vel_task(__unused void *params) {
-    const float alpha = ALPHA;  // Baseline update factor
     uint32_t frameBase[36];
     uint32_t frameCurr[36];
-    uint32_t temp[36];
     int32_t frameDevCurr[36];
     int32_t frameDevPrev[36];
     int32_t frameHistory[HISTORY_LENGTH * 36]; // replace devCurr and devPrev
+
+    const uint32_t BASE_MAX = (uint32_t)4095 << 20;
 
     int8_t dx[VELOCITY_FRAMES];
     int8_t dy[VELOCITY_FRAMES];
@@ -206,14 +206,19 @@ void vel_task(__unused void *params) {
     }
 
     while(1) {
-        super_frame(temp, 40); // Update frame
+        super_frame(frameCurr, 40); // Update frame
 
         for(int i = 0; i < 36; i++){
-            frameCurr[i] = temp[i];
-            frameHistory[0 * 36 + i] = frameCurr[i] - frameBase[i];
+            int64_t dev = (int64_t)frameCurr[i] - (int64_t)frameBase[i];
+            if (dev > INT32_MAX) dev = INT32_MAX;   // Clamp to int32 range
+            if (dev < INT32_MIN) dev = INT32_MIN;
+            // tud_printf("%lld, ", dev >> 20);
+            frameHistory[0 * 36 + i] = (int32_t)dev;
         }
+        // tud_printf("\n");
         
         uint64_t high_score = 0;
+        uint64_t zz_score = 0;
         int8_t high_frame = 0;
         int8_t high_u = 0;
         int8_t high_v = 0;
@@ -224,7 +229,10 @@ void vel_task(__unused void *params) {
                 for(int v = -3; v < 4; v++){
                     if(ncc_compute_overlap(u, v, &ov)){
                         uint64_t score = ncc_score(u, v, &frameHistory[i * 36], &frameHistory[0 * 36], &ov);
-                        // tud_printf("NCC Score at frame: %d, shift (%d,%d): %lld\n", i, u, v, score);
+                        // tud_printf("NCC Score at frame: %d, shift (%d,%d): %f\n", i, u, v, (float)score / (float)(1 << 20));
+                        if (u == 0 && v == 0 && i == 1){
+                            zz_score = score;
+                        }
                         if(score > high_score){
                             high_score = score;
                             high_frame = i;
@@ -259,13 +267,24 @@ void vel_task(__unused void *params) {
 
         if (high_u != 0 || high_v != 0) {
             tud_printf("Shift Detected. Frame: n-%d Max Score: (%d, %d) Score: %lld, Average Velocity: m/s\n", high_frame, high_u, high_v, high_score);
+            // tud_printf("(0, 0) Score: %lld, Shift won by %d percent\n", zz_score, (uint8_t)(((float)high_score / (float)zz_score) - 1) * 100.0f);
         }
 
+        // Baseline update
         for(int i = 0; i < 36; i++){
-            int32_t del = frameCurr[i] - frameBase[i];
-            frameBase[i] += (del * 5) >> 10;
-            // tud_printf("%d, ", frameBase[i] >> 20);
+            int64_t base = (int64_t)frameBase[i];
+            int64_t del = (int64_t)frameCurr[i] - base;
+
+            int64_t step = (del * ALPHA) >> 10;
+            int64_t base_new = base + step;
+
+            if (base_new < 0) base_new = 0;
+            if (base_new > (int64_t)BASE_MAX) base_new = (int64_t)BASE_MAX;
+
+            frameBase[i] = (uint32_t)base_new;
+            // tud_printf("%lu, ", frameBase[0 * 36 + i] >> 20);
         }
+        // tud_printf("\n");
 
         for(int i = HISTORY_LENGTH - 1; i > 0; i--){
             for(int j = 0; j < 36; j++){
