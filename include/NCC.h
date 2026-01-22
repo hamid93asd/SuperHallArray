@@ -21,6 +21,7 @@ typedef struct {
 
 bool ncc_compute_overlap(int8_t u, int8_t v, overlap_t *ov);
 uint64_t ncc_score(int8_t u, int8_t v, int32_t *A, int32_t *B, overlap_t *ov);
+double f_score(int8_t u, int8_t v, int32_t *A, int32_t *B, overlap_t *ov);
 
 void tud_printf(const char* format, ...);
 int64_t isqrt(int64_t n);

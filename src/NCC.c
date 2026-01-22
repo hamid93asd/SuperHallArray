@@ -68,9 +68,34 @@ uint64_t ncc_score(int8_t u, int8_t v, int32_t *A, int32_t *B, overlap_t *ov){
     uint64_t score = num2 / den;
 
     if (u == 0 && v == 0){
-        tud_printf("(0, 0) Score: %llu\n", score);
+        tud_printf("(0, 0) Score: %llu, %f\n", score, (float)score / (float)(1 << 20));
     }
     return score;
+}
+
+double f_score(int8_t u, int8_t v, int32_t *A, int32_t *B, overlap_t *ov){
+    double sumA = 0, sumB = 0, sumAA = 0, sumBB = 0, sumAB = 0;
+
+        for (int r = 0; r < (ov->r1A - ov->r0A); r++){
+            for (int c = 0; c < (ov->c1A - ov->c0A); c++){
+                double a = (double)A[(ov->r0A + r) * COLS + (ov->c0A + c)];
+                double b = (double)B[(ov->r0B + r) * COLS + (ov->c0B + c)];
+
+                sumA += a;
+                sumB += b;
+                sumAA += a * a;
+                sumBB += b * b;
+                sumAB += a * b;
+            }
+        }
+
+        double N = (double)(ov->N);
+        double num = (N * sumAB - (sumA * sumB));
+        double denA = (N * sumAA - (sumA * sumA));
+        double denB = (N * sumBB - (sumB * sumB));
+
+        double score = num / sqrt(denA * denB);
+        return score;
 }
 
 int64_t isqrt(int64_t n) {

@@ -208,14 +208,29 @@ void vel_task(__unused void *params) {
     while(1) {
         super_frame(frameCurr, 40); // Update frame
 
-        for(int i = 0; i < 36; i++){
-            int64_t dev = (int64_t)frameCurr[i] - (int64_t)frameBase[i];
-            if (dev > INT32_MAX) dev = INT32_MAX;   // Clamp to int32 range
-            if (dev < INT32_MIN) dev = INT32_MIN;
-            // tud_printf("%lld, ", dev >> 20);
-            frameHistory[0 * 36 + i] = (int32_t)dev;
+        // for(int i = 0; i < 36; i++){
+            // int64_t dev = (int64_t)frameCurr[i] - (int64_t)frameBase[i];
+            // if (dev > INT32_MAX) dev = INT32_MAX;   // Clamp to int32 range
+            // frameHistory[0 * 36 + i] = (int32_t)dev;
+        // }
+
+        int64_t sum = 0;
+        for (int i = 0; i < 36; i++){
+            sum += (int64_t)frameCurr[i] - (int64_t)frameBase[i];
         }
-        // tud_printf("\n");
+        int64_t mean = sum / 36;
+        // tud_printf("Mean deviation: %llu\n", mean);
+
+        for (int i = 0; i < 36; i++){
+            int64_t x = ((int64_t)frameCurr[i] - (int64_t)frameBase[i]) - (int64_t)mean;
+            
+            if (x > INT32_MAX) x = INT32_MAX;
+            if (x < INT32_MIN) x = INT32_MIN;
+            tud_printf("%lld, ", x >> 20);
+            frameHistory[0 * 36 + i] = (int32_t)x;
+            
+        }
+        tud_printf("\n");
         
         uint64_t high_score = 0;
         uint64_t zz_score = 0;
@@ -231,7 +246,8 @@ void vel_task(__unused void *params) {
                         uint64_t score = ncc_score(u, v, &frameHistory[i * 36], &frameHistory[0 * 36], &ov);
                         // tud_printf("NCC Score at frame: %d, shift (%d,%d): %f\n", i, u, v, (float)score / (float)(1 << 20));
                         if (u == 0 && v == 0 && i == 1){
-                            zz_score = score;
+                            // tud_printf("(0, 0) Score: %f\n", f_score(0, 0, &frameHistory[i * 36], &frameHistory[0 * 36], &ov));
+                            tud_printf("(0, 0) Score: %llu\n", score);
                         }
                         if(score > high_score){
                             high_score = score;
