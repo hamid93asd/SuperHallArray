@@ -187,8 +187,8 @@ void vel_task(__unused void *params) {
 
     const uint32_t BASE_MAX = (uint32_t)4095 << 20;
 
-    int8_t dx[VELOCITY_FRAMES];
-    int8_t dy[VELOCITY_FRAMES];
+    float dx[VELOCITY_FRAMES];
+    float dy[VELOCITY_FRAMES];
     bool toggle = false;
 
     for(int i = 0; i < VELOCITY_FRAMES; i++){
@@ -208,12 +208,6 @@ void vel_task(__unused void *params) {
     while(1) {
         super_frame(frameCurr, 40); // Update frame
 
-        // for(int i = 0; i < 36; i++){
-            // int64_t dev = (int64_t)frameCurr[i] - (int64_t)frameBase[i];
-            // if (dev > INT32_MAX) dev = INT32_MAX;   // Clamp to int32 range
-            // frameHistory[0 * 36 + i] = (int32_t)dev;
-        // }
-
         int64_t sum = 0;
         for (int i = 0; i < 36; i++){
             sum += (int64_t)frameCurr[i] - (int64_t)frameBase[i];
@@ -226,38 +220,57 @@ void vel_task(__unused void *params) {
             
             if (x > INT32_MAX) x = INT32_MAX;
             if (x < INT32_MIN) x = INT32_MIN;
-            tud_printf("%lld, ", x >> 20);
             frameHistory[0 * 36 + i] = (int32_t)x;
-            
         }
-        tud_printf("\n");
+
+        // Check RMS energy
+        uint32_t e_curr = 0;
+        // uint32_t e_prev = 0;
+        for (int i = 0; i < 36; i++){
+            e_curr += (uint32_t)((frameHistory[0 * 36 + i] >> 20) * (frameHistory[0 * 36 + i] >> 20));
+            // e_prev += (uint32_t)((frameHistory[1 * 36 + i] >> 20) * (frameHistory[1 * 36 + i] >> 20));
+        }
+        // tud_printf("Energy: %u\n", e_curr);
         
-        uint64_t high_score = 0;
-        uint64_t zz_score = 0;
+        uint64_t score[HISTORY_LENGTH * 7 * 7] = {0};
+        uint16_t high_idx = 24; // Center index (0 shift, 1st frame)
         int8_t high_frame = 0;
         int8_t high_u = 0;
         int8_t high_v = 0;
         overlap_t ov;
 
-        for(int i = 1; i < HISTORY_LENGTH; i++){
-            for(int u = -3; u < 4; u++){
-                for(int v = -3; v < 4; v++){
-                    if(ncc_compute_overlap(u, v, &ov)){
-                        uint64_t score = ncc_score(u, v, &frameHistory[i * 36], &frameHistory[0 * 36], &ov);
-                        // tud_printf("NCC Score at frame: %d, shift (%d,%d): %f\n", i, u, v, (float)score / (float)(1 << 20));
-                        if (u == 0 && v == 0 && i == 1){
-                            // tud_printf("(0, 0) Score: %f\n", f_score(0, 0, &frameHistory[i * 36], &frameHistory[0 * 36], &ov));
-                            tud_printf("(0, 0) Score: %llu\n", score);
-                        }
-                        if(score > high_score){
-                            high_score = score;
-                            high_frame = i;
-                            high_u = u;
-                            high_v = v;
+        if(e_curr > 200){
+            for(int i = 1; i < HISTORY_LENGTH; i++){
+                for(int u = -3; u < 4; u++){
+                    for(int v = -3; v < 4; v++){
+                        if(ncc_compute_overlap(u, v, &ov)){
+
+                            uint16_t idx = (i - 1) * 49 + (u + 3) * 7 + (v + 3);
+                            score[idx] = ncc_score(u, v, &frameHistory[i * 36], &frameHistory[0 * 36], &ov);
+                            score[idx] = score[idx] / (10 * i);    // Heavily penalize older frames
+
+                            if(score[idx] > score[high_idx]){
+                                high_idx = idx;
+                                high_frame = i - 1;
+                                high_u = u;
+                                high_v = v;
+                            }
                         }
                     }
                 }
             }
+        }
+
+        // Quadratic Peak Interpolation
+        float sub_x = 0.0f;
+        float sub_y = 0.0f;
+
+        if(-3 < high_u && high_u < 3){
+            sub_x = ((float)score[high_idx - 7] - (float)score[high_idx + 7]) / (2.0f * ((float)score[high_idx - 7] - (2.0f * (float)score[high_idx]) + (float)score[high_idx + 7]));
+        }
+
+        if(-3 < high_v && high_v < 3){
+            sub_y = ((float)score[high_idx -1] - (float)score[high_idx + 1]) / (2.0f * ((float)score[high_idx - 1] - (2.0f * (float)score[high_idx]) + (float)score[high_idx + 1]));
         }
 
         for(int i = VELOCITY_FRAMES - 1; i > 0; i--){
@@ -265,11 +278,11 @@ void vel_task(__unused void *params) {
             dy[i] = dy[i - 1];
         }
 
-        dx[0] = high_u;
-        dy[0] = high_v;
+        dx[0] = (float)high_u + sub_x;
+        dy[0] = (float)high_v + sub_y;
 
-        int8_t tot_x = 0;
-        int8_t tot_y = 0;
+        float tot_x = 0;
+        float tot_y = 0;
 
         for(int i = 0; i < VELOCITY_FRAMES; i++){
             tot_x += (dx[i] > 0) ? dx[i] : -dx[i];
@@ -282,7 +295,7 @@ void vel_task(__unused void *params) {
         // tud_printf("High score at shift (%d,%d): %f\n", high_u, high_v, high_score);
 
         if (high_u != 0 || high_v != 0) {
-            tud_printf("Shift Detected. Frame: n-%d Max Score: (%d, %d) Score: %lld, Average Velocity: m/s\n", high_frame, high_u, high_v, high_score);
+            tud_printf("Shift Detected. Frame: n-%d Max Score: (%f, %f) Score: %lld, Average Velocity: m/s\n", high_frame, dx[0], dy[0], score[high_idx]);
             // tud_printf("(0, 0) Score: %lld, Shift won by %d percent\n", zz_score, (uint8_t)(((float)high_score / (float)zz_score) - 1) * 100.0f);
         }
 

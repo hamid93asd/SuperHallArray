@@ -68,7 +68,7 @@ uint64_t ncc_score(int8_t u, int8_t v, int32_t *A, int32_t *B, overlap_t *ov){
     uint64_t score = num2 / den;
 
     if (u == 0 && v == 0){
-        tud_printf("(0, 0) Score: %llu, %f\n", score, (float)score / (float)(1 << 20));
+        // tud_printf("(0, 0) Score: %llu, %f\n", score, (float)score / (float)(1 << 20));
     }
     return score;
 }
