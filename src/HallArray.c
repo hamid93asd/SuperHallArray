@@ -19,7 +19,8 @@
 #define FRAME_DELAY_MS (1000 / FPS)
 #define DEBUG_MODE 0    // 0 = Binary output, 1 = CSV debug output
 #define ARRAY_MODE 1    // 0 = Camera Mode, 1 = Motion Tracker Mode, 2 = Ensemble Mode
-#define ALPHA 5         // Baseline update factor, ALPHA/1024
+#define ALPHA 256         // Baseline update factor, ALPHA/1024
+#define ALPHA_V 0.1     // Velocity Avg baseline update
 #define HISTORY_LENGTH 2 // Number of historical frames for frame shifting
 #define VELOCITY_FRAMES 5   // Averaging period for velocity
 
@@ -162,7 +163,7 @@ void cam_task(void* params){
         // get_frame(frame);
         super_frame(frame, 64);
         for(int i = 0; i < 36; i++){
-            send[i] = (uint16_t)(frame[i] >> 16);
+            send[i] = (uint16_t)(frame[i] >> 16);   // Q20 -> Q4
         }
     
         #if (DEBUG_MODE)
@@ -184,12 +185,21 @@ void vel_task(__unused void *params) {
     int32_t frameDevCurr[36];
     int32_t frameDevPrev[36];
     int32_t frameHistory[HISTORY_LENGTH * 36]; // replace devCurr and devPrev
+    uint64_t start;
+    uint64_t finish;
+    uint64_t frame_time;
 
     const uint32_t BASE_MAX = (uint32_t)4095 << 20;
+    const uint32_t e_threshold = 200;
 
     float dx[VELOCITY_FRAMES];
     float dy[VELOCITY_FRAMES];
     bool toggle = false;
+
+    float vx_avg = 0;
+    float vy_avg = 0;
+    float vx = 0;
+    float vy = 0;
 
     for(int i = 0; i < VELOCITY_FRAMES; i++){
         dx[i] = 0;
@@ -205,7 +215,11 @@ void vel_task(__unused void *params) {
         frameHistory[i] = 0;
     }
 
+    // Terminal Setup
+    tud_printf("\x1b[0m\x1b[?25l\x1b[3J\x1b[2J\x1b[H");
+
     while(1) {
+        start = time_us_64();
         super_frame(frameCurr, 40); // Update frame
 
         int64_t sum = 0;
@@ -225,12 +239,9 @@ void vel_task(__unused void *params) {
 
         // Check RMS energy
         uint32_t e_curr = 0;
-        // uint32_t e_prev = 0;
         for (int i = 0; i < 36; i++){
             e_curr += (uint32_t)((frameHistory[0 * 36 + i] >> 20) * (frameHistory[0 * 36 + i] >> 20));
-            // e_prev += (uint32_t)((frameHistory[1 * 36 + i] >> 20) * (frameHistory[1 * 36 + i] >> 20));
         }
-        // tud_printf("Energy: %u\n", e_curr);
         
         uint64_t score[HISTORY_LENGTH * 7 * 7] = {0};
         uint16_t high_idx = 24; // Center index (0 shift, 1st frame)
@@ -239,7 +250,7 @@ void vel_task(__unused void *params) {
         int8_t high_v = 0;
         overlap_t ov;
 
-        if(e_curr > 200){
+        if(e_curr > e_threshold){
             for(int i = 1; i < HISTORY_LENGTH; i++){
                 for(int u = -3; u < 4; u++){
                     for(int v = -3; v < 4; v++){
@@ -247,7 +258,7 @@ void vel_task(__unused void *params) {
 
                             uint16_t idx = (i - 1) * 49 + (u + 3) * 7 + (v + 3);
                             score[idx] = ncc_score(u, v, &frameHistory[i * 36], &frameHistory[0 * 36], &ov);
-                            score[idx] = score[idx] / (10 * i);    // Heavily penalize older frames
+                            score[idx] = score[idx] / (i);    // Penalize older frames
 
                             if(score[idx] > score[high_idx]){
                                 high_idx = idx;
@@ -259,71 +270,85 @@ void vel_task(__unused void *params) {
                     }
                 }
             }
-        }
+        
 
-        // Quadratic Peak Interpolation
-        float sub_x = 0.0f;
-        float sub_y = 0.0f;
+            // Quadratic Peak Interpolation
+            float sub_x = 0;
+            float sub_y = 0;
 
-        if(-3 < high_u && high_u < 3){
-            sub_x = ((float)score[high_idx - 7] - (float)score[high_idx + 7]) / (2.0f * ((float)score[high_idx - 7] - (2.0f * (float)score[high_idx]) + (float)score[high_idx + 7]));
-        }
-
-        if(-3 < high_v && high_v < 3){
-            sub_y = ((float)score[high_idx -1] - (float)score[high_idx + 1]) / (2.0f * ((float)score[high_idx - 1] - (2.0f * (float)score[high_idx]) + (float)score[high_idx + 1]));
-        }
-
-        for(int i = VELOCITY_FRAMES - 1; i > 0; i--){
-            dx[i] = dx[i - 1];
-            dy[i] = dy[i - 1];
-        }
-
-        dx[0] = (float)high_u + sub_x;
-        dy[0] = (float)high_v + sub_y;
-
-        float tot_x = 0;
-        float tot_y = 0;
-
-        for(int i = 0; i < VELOCITY_FRAMES; i++){
-            tot_x += (dx[i] > 0) ? dx[i] : -dx[i];
-            tot_y += (dy[i] > 0) ? dy[i] : -dy[i];
-        }
-
-        // uint64_t d = sqrt(tot_x * tot_x + tot_y * tot_y);
-
-        // uint64_t vel = d * 20 / (10 * FRAME_DELAY_MS);  // mm/ms -> m/s
-        // tud_printf("High score at shift (%d,%d): %f\n", high_u, high_v, high_score);
-
-        if (high_u != 0 || high_v != 0) {
-            tud_printf("Shift Detected. Frame: n-%d Max Score: (%f, %f) Score: %lld, Average Velocity: m/s\n", high_frame, dx[0], dy[0], score[high_idx]);
-            // tud_printf("(0, 0) Score: %lld, Shift won by %d percent\n", zz_score, (uint8_t)(((float)high_score / (float)zz_score) - 1) * 100.0f);
-        }
-
-        // Baseline update
-        for(int i = 0; i < 36; i++){
-            int64_t base = (int64_t)frameBase[i];
-            int64_t del = (int64_t)frameCurr[i] - base;
-
-            int64_t step = (del * ALPHA) >> 10;
-            int64_t base_new = base + step;
-
-            if (base_new < 0) base_new = 0;
-            if (base_new > (int64_t)BASE_MAX) base_new = (int64_t)BASE_MAX;
-
-            frameBase[i] = (uint32_t)base_new;
-            // tud_printf("%lu, ", frameBase[0 * 36 + i] >> 20);
-        }
-        // tud_printf("\n");
-
-        for(int i = HISTORY_LENGTH - 1; i > 0; i--){
-            for(int j = 0; j < 36; j++){
-                frameHistory[(i * 36) + j] = frameHistory[((i - 1) * 36) + j];
+            if(-3 < high_u && high_u < 3){
+                sub_x = ((float)score[high_idx - 7] - (float)score[high_idx + 7]) / (2.0f * ((float)score[high_idx - 7] - (2.0f * (float)score[high_idx]) + (float)score[high_idx + 7]));
             }
+
+            if(-3 < high_v && high_v < 3){
+                sub_y = ((float)score[high_idx - 1] - (float)score[high_idx + 1]) / (2.0f * ((float)score[high_idx - 1] - (2.0f * (float)score[high_idx]) + (float)score[high_idx + 1]));
+            }
+
+            for(int i = VELOCITY_FRAMES - 1; i > 0; i--){
+                dx[i] = dx[i - 1];
+                dy[i] = dy[i - 1];
+            }
+
+            dx[0] = (float)high_u + sub_x;
+            dy[0] = (float)high_v + sub_y;
+
+            float tot_x = 0;
+            float tot_y = 0;
+
+            for(int i = 0; i < VELOCITY_FRAMES; i++){
+                tot_x += (dx[i] > 0) ? dx[i] : -dx[i];
+                tot_y += (dy[i] > 0) ? dy[i] : -dy[i];
+            }
+
+            vx = dx[0] * 20.0 / (FRAME_DELAY_MS * (HISTORY_LENGTH - 1));
+            vy = dy[0] * 20.0 / (FRAME_DELAY_MS * (HISTORY_LENGTH - 1));
+
+            // Baseline update
+            for(int i = 0; i < 36; i++){
+                int64_t base = (int64_t)frameBase[i];
+                int64_t del = (int64_t)frameCurr[i] - base;
+
+                int64_t step = (del * ALPHA) >> 10;
+                int64_t base_new = base + step;
+
+                if (base_new < 0) base_new = 0;
+                if (base_new > (int64_t)BASE_MAX) base_new = (int64_t)BASE_MAX;
+
+                frameBase[i] = (uint32_t)base_new;
+            }
+
+            for(int i = HISTORY_LENGTH - 1; i > 0; i--){
+                for(int j = 0; j < 36; j++){
+                    frameHistory[(i * 36) + j] = frameHistory[((i - 1) * 36) + j];
+                }
+            }
+
+            vx_avg = vx_avg * (1 - ALPHA_V) + vx * ALPHA_V;
+            vy_avg = vy_avg * (1 - ALPHA_V) + vx * ALPHA_V;
+
+        } else {
+            vx_avg = 0;
+            vy_avg = 0;
+            vx = 0;
+            vy = 0;
         }
 
-        // cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, toggle);
-        toggle = !toggle;
-        vTaskDelay(pdMS_TO_TICKS(FRAME_DELAY_MS));
+        finish = time_us_64();
+        frame_time = (finish - start) / 1000;    // Include print duration estimate
+
+        // Terminal Setup
+        tud_printf("\x1b[?25l\x1b[H\x1b[2E\x1b[32;49m\x1b[3mSuper\x1b[23m\x1b[39;49m Hall Array Velocity Monitor - Cubby DeBry, Jan 2026");
+        tud_printf("\x1b[2E");
+
+        if(frame_time < FRAME_DELAY_MS)
+            tud_printf("Shift: (%7.3f, %7.3f) \tScore: %8lld \tCompute time: \x1b[32m%4llu\x1b[39m", dx[0], dy[0], score[high_idx], frame_time);
+        else
+            tud_printf("Shift: (%7.3f, %7.3f) \tScore: %8lld \tCompute time: \x1b[31m%4llu\x1b[39m", dx[0], dy[0], score[high_idx], frame_time);
+        tud_printf("\nVelocity: (%7.3f, %7.3f) \tAverage Velocity: (%7.3f, %7.3f)", vx, vy, vx_avg, vy_avg);
+
+        if(frame_time < FRAME_DELAY_MS){
+            vTaskDelay(pdMS_TO_TICKS(FRAME_DELAY_MS - frame_time));
+        }
     }
 }
 

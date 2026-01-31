@@ -64,13 +64,10 @@ uint64_t ncc_score(int8_t u, int8_t v, int32_t *A, int32_t *B, overlap_t *ov){
     uint64_t num2 = (num * num);
     uint64_t den = (denA * denB); // was >> 20, as written returns 0s
     
-    // uint64_t score = (uint64_t)(num2 / den);
-    uint64_t score = num2 / den;
-
-    if (u == 0 && v == 0){
-        // tud_printf("(0, 0) Score: %llu, %f\n", score, (float)score / (float)(1 << 20));
-    }
-    return score;
+    if(den != 0){
+        uint64_t score = num2 / den;
+        return score;
+    } else return 0;
 }
 
 double f_score(int8_t u, int8_t v, int32_t *A, int32_t *B, overlap_t *ov){
