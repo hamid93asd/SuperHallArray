@@ -8,4 +8,6 @@ log
 *.pid
 *-profile
 *.DS_Store
+Manuscript/*
+
 

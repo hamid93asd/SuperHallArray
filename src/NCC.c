@@ -17,7 +17,6 @@ bool ncc_compute_overlap(int8_t u, int8_t v, overlap_t *ov){
     return (ov->N >= MIN_OVERLAP) ? true : false;     // Require at least MIN_OVERLAP overlapping pixels
 }
 
-
 uint64_t ncc_score(int8_t u, int8_t v, int32_t *A, int32_t *B, overlap_t *ov){
 
     int64_t sumA = 0, sumB = 0;
@@ -51,9 +50,7 @@ uint64_t ncc_score(int8_t u, int8_t v, int32_t *A, int32_t *B, overlap_t *ov){
     int64_t denA = (N * sumAA - crossAA);
     int64_t denB = (N * sumBB - crossBB);
 
-    if (denA <= 0 || denB <= 0){
-        return 0;
-    }
+    if (denA <= 0 || denB <= 0) return 0;
 
     num = (num > 0) ? num : -num;
 
@@ -63,6 +60,8 @@ uint64_t ncc_score(int8_t u, int8_t v, int32_t *A, int32_t *B, overlap_t *ov){
 
     uint64_t num2 = (num * num);
     uint64_t den = (denA * denB); // was >> 20, as written returns 0s
+
+    if(num2 < 0 || den < 0) return 0;
     
     if(den != 0){
         uint64_t score = num2 / den;
@@ -108,3 +107,56 @@ int64_t isqrt(int64_t n) {
     }
     return x;
 }
+
+uint64_t fast_ncc(int8_t u, int8_t v, int16_t *A, int16_t *B, overlap_t *ov){
+
+    int16_t sumA = 0, sumB = 0;
+    int16_t sumAA = 0, sumBB = 0, sumAB = 0;
+
+    for (int r = 0; r < (ov->r1A - ov->r0A); r++){
+        for (int c = 0; c < (ov->c1A - ov->c0A); c++){
+            int16_t a = A[(ov->r0A + r) * COLS + (ov->c0A + c)];
+            int16_t b = B[(ov->r0B + r) * COLS + (ov->c0B + c)];
+
+            sumA += a;
+            sumB += b;
+            sumAA += a * a;
+            sumBB += b * b;
+            sumAB += a * b;
+        }
+    }
+
+    // Need to benchmark, PICO doesn't have hardware float
+
+    int64_t N = (int64_t)(ov->N);
+    int64_t crossAA = (sumA * sumA); // >> 20;
+    int64_t crossBB = (sumB * sumB); // >> 20;
+    int64_t crossAB = (sumA * sumB); // >> 20;
+    
+    sumAA = sumAA; // >> 20;
+    sumBB = sumBB; // >> 20;
+    sumAB = sumAB; // >> 20;
+
+    int64_t num = (N * sumAB - crossAB);
+    int64_t denA = (N * sumAA - crossAA);
+    int64_t denB = (N * sumBB - crossBB);
+
+    if (denA <= 0 || denB <= 0) return 0;
+
+    num = (num > 0) ? num : -num;
+
+    uint64_t num2 = (num * num);
+    uint64_t den = (denA * denB);
+
+    if(num2 < 0 || den <= 0) return 0;
+    
+    // To Do:
+    // Eliminate division, use __builtin_clzll(x) to count leading zeros
+    // Shift num and denom by same magnitude
+    // Comapre cross products to find best ration w/o division
+    if(den != 0){
+        uint64_t score = num2 / den;
+        return score;
+    } else return 0;
+}
+

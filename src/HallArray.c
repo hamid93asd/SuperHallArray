@@ -1,18 +1,6 @@
 // HallArray.c 
 // Cubby DeBry 2025
-
-#include <stdio.h>
-#include "tusb.h"
-#include "FreeRTOS.h"
-#include "task.h"
-#include "pico.h"
-#include "pico/stdlib.h"
-#include "pico/multicore.h"
-#include "pico/cyw43_arch.h"
-#include "hardware/spi.h"
-#include "hardware/gpio.h"
-#include "NCC.h"
-#include "pico/time.h"
+#include "HallArray.h"
 
 #define BUFFER_SIZE 16
 #define FPS 60
@@ -20,7 +8,7 @@
 #define DEBUG_MODE 0    // 0 = Binary output, 1 = CSV debug output
 #define ARRAY_MODE 1    // 0 = Camera Mode, 1 = Motion Tracker Mode, 2 = Ensemble Mode
 #define ALPHA 256         // Baseline update factor, ALPHA/1024
-#define ALPHA_V 0.1     // Velocity Avg baseline update
+#define ALPHA_V 0.01     // Velocity Avg baseline update
 #define HISTORY_LENGTH 2 // Number of historical frames for frame shifting
 #define VELOCITY_FRAMES 5   // Averaging period for velocity
 
@@ -323,8 +311,8 @@ void vel_task(__unused void *params) {
                 }
             }
 
-            vx_avg = vx_avg * (1 - ALPHA_V) + vx * ALPHA_V;
-            vy_avg = vy_avg * (1 - ALPHA_V) + vx * ALPHA_V;
+            vx_avg = vx_avg * (1.0f - ALPHA_V) + vx * ALPHA_V;
+            vy_avg = vy_avg * (1.0f - ALPHA_V) + vx * ALPHA_V;
 
         } else {
             vx_avg = 0;
@@ -337,13 +325,13 @@ void vel_task(__unused void *params) {
         frame_time = (finish - start) / 1000;    // Include print duration estimate
 
         // Terminal Setup
-        tud_printf("\x1b[?25l\x1b[H\x1b[2E\x1b[32;49m\x1b[3mSuper\x1b[23m\x1b[39;49m Hall Array Velocity Monitor - Cubby DeBry, Jan 2026");
-        tud_printf("\x1b[2E");
-
-        if(frame_time < FRAME_DELAY_MS)
-            tud_printf("Shift: (%7.3f, %7.3f) \tScore: %8lld \tCompute time: \x1b[32m%4llu\x1b[39m", dx[0], dy[0], score[high_idx], frame_time);
-        else
-            tud_printf("Shift: (%7.3f, %7.3f) \tScore: %8lld \tCompute time: \x1b[31m%4llu\x1b[39m", dx[0], dy[0], score[high_idx], frame_time);
+        // tud_printf("\x1b[?25l\x1b[H\x1b[2E\x1b[32;49m\x1b[3mSuper\x1b[23m\x1b[39;49m Hall Array Velocity Monitor - Cubby DeBry, Jan 2026");
+        // tud_printf("\x1b[2E");
+// 
+        // if(frame_time < FRAME_DELAY_MS)
+            // tud_printf("Shift: (%7.3f, %7.3f) \tScore: %8lld \tCompute time: \x1b[32m%4llu\x1b[39m", dx[0], dy[0], score[high_idx], frame_time);
+        // else
+            // tud_printf("Shift: (%7.3f, %7.3f) \tScore: %8lld \tCompute time: \x1b[31m%4llu\x1b[39m", dx[0], dy[0], score[high_idx], frame_time);
         tud_printf("\nVelocity: (%7.3f, %7.3f) \tAverage Velocity: (%7.3f, %7.3f)", vx, vy, vx_avg, vy_avg);
 
         if(frame_time < FRAME_DELAY_MS){
