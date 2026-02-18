@@ -6,12 +6,24 @@
 #define FPS 60
 #define FRAME_DELAY_MS (1000 / FPS)
 #define DEBUG_MODE 0    // 0 = Binary output, 1 = CSV debug output
-#define ARRAY_MODE 1    // 0 = Camera Mode, 1 = Motion Tracker Mode, 2 = Ensemble Mode
+#define MODE_CAMERA 0
+#define MODE_NCC_VEL 1
+#define MODE_AVG 2
+#define MODE_SIMPLE_VEL 3
+#define ARRAY_MODE MODE_SIMPLE_VEL
 #define ALPHA 256         // Baseline update factor, ALPHA/1024
 #define ALPHA_V 0.01     // Velocity Avg baseline update
 #define HISTORY_LENGTH 2 // Number of historical frames for frame shifting
 #define VELOCITY_FRAMES 5   // Averaging period for velocity
 #define EPS 0.001   // Minimum Denominator
+
+#define GRID_PITCH_MM 20.0f
+#define SIMPLE_VEL_SUPER_FRAMES 16
+#define SIMPLE_VEL_BASE_ALPHA 64
+#define SIMPLE_VEL_PEAK_THRESH 60
+#define SIMPLE_VEL_ALPHA 0.25f
+#define SIMPLE_VEL_MIN_EVENT_DT_US 5000
+#define SIMPLE_VEL_MAX_EVENT_DT_US 500000
 
 #define SPI_PORT spi0
 #define PIN_MISO 0
@@ -164,6 +176,101 @@ void cam_task(void* params){
         vTaskDelay(pdMS_TO_TICKS(FRAME_DELAY_MS));  // This still needs timing, should be delay FRAME_DELAY_MS minus frame read time
         // cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, toggle);
         toggle = !toggle;
+    }
+}
+
+// Barebones 1D velocity from column-to-column peak timing
+void simple_vel_task(__unused void *params){
+    uint32_t frame[36];
+    int32_t col_raw[6];
+    int32_t col_base[6];
+    int32_t col_dev[6];
+    int32_t col_dev_prev[6] = {0};
+    int32_t col_deriv_prev[6] = {0};
+
+    bool base_init = false;
+    bool have_last_peak = false;
+    uint8_t last_peak_col = 0;
+    uint64_t last_peak_us = 0;
+
+    float v_inst = 0.0f;
+    float v_ema = 0.0f;
+
+    tud_printf("simple_vel,start\n");
+
+    while(1){
+        uint64_t loop_start = time_us_64();
+        super_frame(frame, SIMPLE_VEL_SUPER_FRAMES);
+
+        for(int col = 0; col < 6; col++){
+            int32_t sum = 0;
+            for(int row = 0; row < 6; row++){
+                sum += (int32_t)(frame[col * 6 + row] >> 20);
+            }
+            col_raw[col] = sum;
+            if(!base_init){
+                col_base[col] = sum;
+            }
+        }
+        base_init = true;
+
+        int32_t mean = 0;
+        for(int col = 0; col < 6; col++){
+            int32_t del = col_raw[col] - col_base[col];
+            col_base[col] += (del * SIMPLE_VEL_BASE_ALPHA) >> 10;
+            col_dev[col] = del;
+            mean += del;
+        }
+        mean /= 6;
+        for(int col = 0; col < 6; col++){
+            col_dev[col] -= mean;
+        }
+
+        int32_t best_amp = SIMPLE_VEL_PEAK_THRESH;
+        int8_t best_col = -1;
+        for(int col = 0; col < 6; col++){
+            int32_t deriv = col_dev[col] - col_dev_prev[col];
+            bool sign_flip = (col_deriv_prev[col] > 0) && (deriv <= 0);
+            bool strong = col_dev[col] > SIMPLE_VEL_PEAK_THRESH;
+            bool left_ok = (col == 0) || (col_dev[col] >= col_dev[col - 1]);
+            bool right_ok = (col == 5) || (col_dev[col] >= col_dev[col + 1]);
+            bool spatial_peak = left_ok && right_ok;
+
+            if(sign_flip && strong && spatial_peak && (col_dev[col] > best_amp)){
+                best_amp = col_dev[col];
+                best_col = (int8_t)col;
+            }
+
+            col_deriv_prev[col] = deriv;
+        }
+
+        uint64_t now_us = time_us_64();
+        if(best_col >= 0){
+            if(!have_last_peak){
+                have_last_peak = true;
+                last_peak_col = (uint8_t)best_col;
+                last_peak_us = now_us;
+            } else if((uint8_t)best_col != last_peak_col){
+                uint64_t dt_us = now_us - last_peak_us;
+                if((dt_us >= SIMPLE_VEL_MIN_EVENT_DT_US) && (dt_us <= SIMPLE_VEL_MAX_EVENT_DT_US)){
+                    int32_t dcol = (int32_t)best_col - (int32_t)last_peak_col;
+                    v_inst = ((float)dcol * GRID_PITCH_MM * 1000000.0f) / (float)dt_us; // mm/s
+                    v_ema = ((1.0f - SIMPLE_VEL_ALPHA) * v_ema) + (SIMPLE_VEL_ALPHA * v_inst);
+                    tud_printf("%llu,%d,%7.2f,%7.2f\n", now_us, (int)best_col, v_inst, v_ema);
+                }
+                last_peak_col = (uint8_t)best_col;
+                last_peak_us = now_us;
+            }
+        }
+
+        for(int col = 0; col < 6; col++){
+            col_dev_prev[col] = col_dev[col];
+        }
+
+        uint64_t frame_time_ms = (time_us_64() - loop_start) / 1000;
+        if(frame_time_ms < FRAME_DELAY_MS){
+            vTaskDelay(pdMS_TO_TICKS(FRAME_DELAY_MS - frame_time_ms));
+        }
     }
 }
 
@@ -391,7 +498,7 @@ void avg_task(void* params){
         start = time_us_64();
         get_frame(frame);           // Raw frame (12 bit)
         super_frame(s_frame, 64);   // Super sampled frame (32 bit)
-        raw = ((uint32_t)frame[10]) << 20;  // Sensor 35
+        raw = ((uint32_t)frame[34]) << 20;  // Sensor 35
 
         // Compute spatial average
         // for(int i = 0; i < 36; i++){
@@ -445,15 +552,18 @@ int main(void)
     xTaskCreate(tud_update_task, "tud",
             configMINIMAL_STACK_SIZE, NULL, tskIDLE_PRIORITY + 1, &tudtask);
 
-    #if (ARRAY_MODE == 0)
+    #if (ARRAY_MODE == MODE_CAMERA)
         xTaskCreate(cam_task, "Thread",
                     configMINIMAL_STACK_SIZE, NULL, tskIDLE_PRIORITY + 2, &readtask);
-    #elif (ARRAY_MODE == 1)
+    #elif (ARRAY_MODE == MODE_NCC_VEL)
         xTaskCreate(vel_task, "Thread",
                     2048 * 10, NULL, tskIDLE_PRIORITY + 2, &readtask);
-    #elif (ARRAY_MODE == 2)
+    #elif (ARRAY_MODE == MODE_AVG)
         xTaskCreate(avg_task, "Thread",
                     configMINIMAL_STACK_SIZE, NULL, tskIDLE_PRIORITY + 2, &readtask);
+    #elif (ARRAY_MODE == MODE_SIMPLE_VEL)
+        xTaskCreate(simple_vel_task, "Thread",
+                    2048 * 4, NULL, tskIDLE_PRIORITY + 2, &readtask);
     #endif
 
     vTaskStartScheduler();
