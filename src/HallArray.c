@@ -252,7 +252,7 @@ void vel_task(__unused void *params) {
                     for(int v = -3; v < 4; v++){
                         if(ncc_compute_overlap(u, v, &ov)){
                             uint16_t idx = (i - 1) * 49 + (u + 3) * 7 + (v + 3);
-                            score[idx] = ncc_score(u, v, &frameHistory[i * 36], &frameHistory[0 * 36], &ov);
+                            score[idx] = 1024 * f_score(u, v, &frameHistory[i * 36], &frameHistory[0 * 36], &ov);
                             score[idx] = score[idx] / (i);    // Penalize older frames
 
                             if(score[idx] > score[high_idx]){
@@ -294,8 +294,8 @@ void vel_task(__unused void *params) {
                 dt[i] = dt[i - 1];
             }
 
-            dx[0] = (float)high_u;// + sub_x;
-            dy[0] = (float)high_v;// + sub_y;
+            dx[0] = (float)high_u + sub_x;
+            dy[0] = (float)high_v + sub_y;
             dt[0] = (float)(start - prev_sample) * 0.001f; // us -> ms
 
             float tot_x = 0;
@@ -327,6 +327,7 @@ void vel_task(__unused void *params) {
             win_vy = 0;
             vx = 0;
             vy = 0;
+            dx[0] = dy[0] = 0;
         }
 
         // Baseline update
@@ -361,9 +362,9 @@ void vel_task(__unused void *params) {
         // else
             // tud_printf("Shift: (%7.3f, %7.3f) \tScore: %8lld \tCompute time: \x1b[31m%4llu\x1b[39m", dx[0], dy[0], score[high_idx], frame_time);
         // tud_printf("\n%7.3f, %7.3f, %7.3f, %7.3f", vx, vy, win_vx, win_vy);
-        if((high_u != 0) & (high_v != 0)){
-            tud_printf("Shift: (%3d, %3d)\n", high_u, high_v);
-        }
+
+        tud_printf("Shift: (%7.3f, %7.3f) Score: %7.3f\n", dx[0], dy[0], (float)score[high_idx] * 0.001f);
+
 
         if(frame_time < FRAME_DELAY_MS){
             vTaskDelay(pdMS_TO_TICKS(FRAME_DELAY_MS - frame_time));

@@ -52,7 +52,7 @@ uint64_t ncc_score(int8_t u, int8_t v, int32_t *A, int32_t *B, overlap_t *ov){
 
     if (denA <= 0 || denB <= 0) return 0;
 
-    num = (num > 0) ? num : -num;
+    // num = (num > 0) ? num : -num;
 
     num = num >> 30;    // Eliminates all fractional bits :( Q0
     denA = denA >> 40;
