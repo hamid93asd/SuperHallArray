@@ -24,6 +24,7 @@
 #define SIMPLE_VEL_ALPHA 0.25f
 #define SIMPLE_VEL_MIN_EVENT_DT_US 5000
 #define SIMPLE_VEL_MAX_EVENT_DT_US 500000
+#define SIMPLE_VEL_MAX_COL_STEP 1
 
 #define SPI_PORT spi0
 #define PIN_MISO 0
@@ -196,7 +197,7 @@ void simple_vel_task(__unused void *params){
     float v_inst = 0.0f;
     float v_ema = 0.0f;
 
-    tud_printf("simple_vel,start\n");
+    // tud_printf("simple_vel,start\n");
 
     while(1){
         uint64_t loop_start = time_us_64();
@@ -252,14 +253,21 @@ void simple_vel_task(__unused void *params){
                 last_peak_us = now_us;
             } else if((uint8_t)best_col != last_peak_col){
                 uint64_t dt_us = now_us - last_peak_us;
+                bool accepted_event = false;
                 if((dt_us >= SIMPLE_VEL_MIN_EVENT_DT_US) && (dt_us <= SIMPLE_VEL_MAX_EVENT_DT_US)){
                     int32_t dcol = (int32_t)best_col - (int32_t)last_peak_col;
-                    v_inst = ((float)dcol * GRID_PITCH_MM * 1000000.0f) / (float)dt_us; // mm/s
-                    v_ema = ((1.0f - SIMPLE_VEL_ALPHA) * v_ema) + (SIMPLE_VEL_ALPHA * v_inst);
-                    tud_printf("%llu,%d,%7.2f,%7.2f\n", now_us, (int)best_col, v_inst, v_ema);
+                    if((dcol <= SIMPLE_VEL_MAX_COL_STEP) && (dcol >= -SIMPLE_VEL_MAX_COL_STEP)){
+                        v_inst = ((float)dcol * GRID_PITCH_MM * 1000000.0f) / (float)dt_us; // mm/s
+                        v_ema = ((1.0f - SIMPLE_VEL_ALPHA) * v_ema) + (SIMPLE_VEL_ALPHA * v_inst);
+                        // tud_printf("%llu,%d,%7.2f,%7.2f\n", now_us, (int)best_col, v_inst, v_ema);
+                        tud_printf("\n%12llu, %7.3f, 0", now_us, v_inst);  // Data collection csv format: time, vx, vy
+                        accepted_event = true;
+                    }
                 }
-                last_peak_col = (uint8_t)best_col;
-                last_peak_us = now_us;
+                if(accepted_event || (dt_us > SIMPLE_VEL_MAX_EVENT_DT_US)){
+                    last_peak_col = (uint8_t)best_col;
+                    last_peak_us = now_us;
+                }
             }
         }
 
