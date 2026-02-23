@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
+# Cubby DeBry 2/2026 via Codex 5.3
 """
 Batch amplitude extraction from stepped-amplitude recordings at fixed frequency (e.g., 1 Hz).
 
 Assumptions:
-- Files are named like "0.1V.txt", "1V.txt", "2.5V.txt", "20V.txt" (case-insensitive).
-- Each file has at least 4 signal columns (we use the first 4).
-- If a timestamp column exists, it's the LAST column.
-  - If timestamps look like microseconds, they are converted to seconds automatically.
+- Files are named like "0.1V.txt", "1V.txt", "2.5V.txt", "20V.txt" (case-insensitive),
+  or split files like "..._2.5_Vpp.csv".
+- By default, files use columns (1-based):
+  raw=1, temporal=5, spatial=9, combined=10, timestamp=11.
+  Other columns are ignored.
+- If timestamps look like microseconds, they are converted to seconds automatically.
 - Amplitude is extracted via coherent least-squares fit at fixed frequency f0:
     x(t) ≈ a*sin(2π f0 t) + b*cos(2π f0 t)
     A_peak = sqrt(a^2 + b^2)
@@ -18,11 +21,10 @@ Outputs:
 Usage:
   python amp_sweep.py --folder /path/to/folder --freq 1
   python amp_sweep.py --folder . --freq 1 --discard_frac 0.25
-  python amp_sweep.py --folder . --freq 1 --pattern "*.txt" --fs 60   # only if no timestamp column
+  python amp_sweep.py --folder . --freq 1 --pattern "*.csv" --fs 60   # only if no timestamp column
 """
 
 from __future__ import annotations
-import argparse
 import glob
 import os
 import re
@@ -33,20 +35,73 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 
-V_RE = re.compile(r"(?P<v>\d+(?:\.\d+)?)\s*v", re.IGNORECASE)
+V_RE = re.compile(r"(?P<v>\d+(?:\.\d+)?)(?=\s*v(?:pp)?\b)", re.IGNORECASE)
+VPP_UNDERSCORE_RE = re.compile(r"_(?P<v>\d+(?:\.\d+)?)_vpp(?:\.[^.]+)?$", re.IGNORECASE)
 
+# Config
+FOLDER = "Scripts/Plot Data/Amplitude Sweep/Split"
+FREQ_HZ = 10.0
+PATTERN = "*.csv"
+SIGNAL_COLS_1B = [1, 5, 9, 10]
+TIME_COL_1B = 11
+FS_FALLBACK: Optional[float] = None
+EXPECTED_COLS: Optional[int] = None
+MAX_REL_JUMP = 0.5
+DISCARD_FRAC = 0.25
+OUT_CSV = "amplitude_summary_vs_inputV.csv"
+OUT_QC_CSV = "row_qc_summary_vs_inputV.csv"
+OUT_PNG = "amplitude_vs_inputV.png"
+
+# Measured Mag Field, Voltage
+mag_field = np.array([  # Volts, mT
+    [3.012,     0.21],
+    [3.526,     0.24],
+    [4.128,     0.26],
+    [4.832,     0.33],
+    [5.6,       0.39],
+    [6.622,     0.44],
+    [7.7,       0.52],
+    [9.0,       0.62],
+    [10.624,    0.72],
+    [12.43,     0.85],
+    [14.559,    0.99],
+    [17.044,    1.15],
+    [19.95,     1.35]
+])
+
+def fit_voltage_to_bfield(calibration_v_mt: np.ndarray) -> Tuple[float, float, float]:
+    """Fit B[mT] = slope*V + intercept. Returns (slope, intercept, r2)."""
+    cal = np.asarray(calibration_v_mt, dtype=np.float64)
+    if cal.ndim != 2 or cal.shape[1] != 2 or cal.shape[0] < 2:
+        raise ValueError("mag_field must be Nx2 with columns [V, mT] and at least 2 rows.")
+    v = cal[:, 0]
+    b = cal[:, 1]
+    slope, intercept = np.polyfit(v, b, 1)
+    b_hat = slope * v + intercept
+    ss_res = float(np.sum((b - b_hat) ** 2))
+    ss_tot = float(np.sum((b - np.mean(b)) ** 2))
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else np.nan
+    return float(slope), float(intercept), float(r2)
 
 def parse_volts_from_filename(path: str) -> Optional[float]:
     base = os.path.basename(path)
-    m = V_RE.search(base)
+    m = VPP_UNDERSCORE_RE.search(base)
+    if not m:
+        m = V_RE.search(base)
     if not m:
         return None
     return float(m.group("v"))
 
 
-def load_table(path: str, expected_cols: int = 5, max_rel_jump: float = 0.5) -> Tuple[np.ndarray, Dict[str, int]]:
+def load_table(
+    path: str,
+    selected_cols: List[int],
+    expected_cols: Optional[int] = None,
+    max_rel_jump: float = 0.5,
+) -> Tuple[np.ndarray, Dict[str, int]]:
     rows: List[List[float]] = []
     prev_row: Optional[List[float]] = None
+    max_col = max(selected_cols) if selected_cols else -1
 
     n_short = 0
     n_long = 0
@@ -56,10 +111,6 @@ def load_table(path: str, expected_cols: int = 5, max_rel_jump: float = 0.5) -> 
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         lines = f.readlines()
 
-    # Recordings often have short metadata/footer blocks.
-    if len(lines) > 8:
-        lines = lines[4:-4]
-
     for line in lines:
         s = line.strip()
         if not s:
@@ -67,22 +118,29 @@ def load_table(path: str, expected_cols: int = 5, max_rel_jump: float = 0.5) -> 
 
         fields = [v.strip() for v in s.split(",")] if "," in s else s.split()
         fields = [v for v in fields if v]
-        if len(fields) < expected_cols:
-            n_short += 1
-            continue
-        if len(fields) > expected_cols:
-            n_long += 1
-            continue
+        if expected_cols is not None:
+            if len(fields) < expected_cols:
+                n_short += 1
+                continue
+            if len(fields) > expected_cols:
+                n_long += 1
+                continue
 
         try:
-            row = [float(fields[i]) for i in range(expected_cols)]
+            row_all = [float(v) for v in fields]
         except ValueError:
             n_non_numeric += 1
             continue
 
+        if len(row_all) <= max_col:
+            n_short += 1
+            continue
+
+        row = [row_all[i] for i in selected_cols]
+
         if prev_row is not None:
             bad_jump = False
-            for i in range(expected_cols):
+            for i in range(len(row)):
                 denom = max(abs(prev_row[i]), 1.0)
                 rel_delta = abs(row[i] - prev_row[i]) / denom
                 if rel_delta > max_rel_jump:
@@ -165,25 +223,16 @@ def coherent_amp_peak(t: np.ndarray, x: np.ndarray, f_hz: float) -> float:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--folder", required=True, help="Folder containing recordings like 0.1V.txt ... 20V.txt")
-    ap.add_argument("--freq", type=float, required=True, help="Injected sine frequency in Hz (e.g., 1)")
-    ap.add_argument("--pattern", default="*.txt", help="Glob pattern inside folder (default: *.txt)")
-    ap.add_argument("--fs", type=float, default=None, help="Fallback sample rate (Hz) if no timestamp column.")
-    ap.add_argument("--expected_cols", type=int, default=5,
-                    help="Expected column count. Rows not matching are dropped (default: 5).")
-    ap.add_argument("--max_rel_jump", type=float, default=0.5,
-                    help="Row is dropped if any value changes by > this fraction vs previous accepted row.")
-    ap.add_argument("--discard_frac", type=float, default=0.25,
-                    help="Discard initial fraction for settling (default 0.25). Set 0 to disable.")
-    ap.add_argument("--out_csv", default="amplitude_summary_vs_inputV.csv", help="Output CSV filename")
-    ap.add_argument("--out_qc_csv", default="row_qc_summary_vs_inputV.csv", help="Output QC CSV filename")
-    ap.add_argument("--out_png", default="amplitude_vs_inputV.png", help="Output plot filename (PNG)")
-    args = ap.parse_args()
+    if TIME_COL_1B < 1:
+        raise SystemExit("TIME_COL_1B must be >= 1")
+    signal_cols_1b = SIGNAL_COLS_1B
+    signal_cols_0b = [c - 1 for c in signal_cols_1b]
+    time_col_0b = TIME_COL_1B - 1
+    selected_cols = [*signal_cols_0b, time_col_0b]
 
-    files = sorted(glob.glob(os.path.join(args.folder, args.pattern)))
+    files = sorted(glob.glob(os.path.join(FOLDER, PATTERN)))
     if not files:
-        raise SystemExit(f"No files matched: {os.path.join(args.folder, args.pattern)}")
+        raise SystemExit(f"No files matched: {os.path.join(FOLDER, PATTERN)}")
 
     rows = []
     skipped = []
@@ -195,13 +244,18 @@ def main() -> int:
             skipped.append(os.path.basename(path))
             continue
 
-        arr, qc = load_table(path, expected_cols=args.expected_cols, max_rel_jump=args.max_rel_jump)
+        arr, qc = load_table(
+            path,
+            selected_cols=selected_cols,
+            expected_cols=EXPECTED_COLS,
+            max_rel_jump=MAX_REL_JUMP,
+        )
         qc_by_file[os.path.basename(path)] = qc
-        t, sig = infer_time_seconds(arr, args.fs)
+        t, sig = infer_time_seconds(arr, FS_FALLBACK)
 
         # discard settling
-        if args.discard_frac > 0:
-            n0 = int(len(t) * args.discard_frac)
+        if DISCARD_FRAC > 0:
+            n0 = int(len(t) * DISCARD_FRAC)
             if n0 >= len(t) - 20:
                 continue
             t = t[n0:] - t[n0]
@@ -210,7 +264,7 @@ def main() -> int:
         if len(t) < 20:
             continue
 
-        amps = [coherent_amp_peak(t, sig[:, ch], args.freq) for ch in range(4)]
+        amps = [coherent_amp_peak(t, sig[:, ch], FREQ_HZ) for ch in range(4)]
         rows.append([vin, *amps])
 
     if not rows:
@@ -218,8 +272,10 @@ def main() -> int:
 
     rows.sort(key=lambda r: r[0])
     out = pd.DataFrame(rows, columns=["input_v", "amp1_peak", "amp2_peak", "amp3_peak", "amp4_peak"])
+    b_slope, b_intercept, b_r2 = fit_voltage_to_bfield(mag_field)
+    out["input_b_mT"] = b_slope * out["input_v"] + b_intercept
 
-    out_csv_path = os.path.join(args.folder, args.out_csv)
+    out_csv_path = os.path.join(FOLDER, OUT_CSV)
     out.to_csv(out_csv_path, index=False)
 
     qc_rows = []
@@ -242,26 +298,29 @@ def main() -> int:
         )
 
     qc_df = pd.DataFrame(qc_rows)
-    out_qc_csv_path = os.path.join(args.folder, args.out_qc_csv)
+    out_qc_csv_path = os.path.join(FOLDER, OUT_QC_CSV)
     qc_df.to_csv(out_qc_csv_path, index=False)
 
     # Plot: amplitude vs injected voltage (log x)
     plt.figure(figsize=(8, 6), dpi=300)
-    plt.plot(out["input_v"], out["amp1_peak"], marker="o", linewidth=1, label="Response 1")
-    plt.plot(out["input_v"], out["amp2_peak"], marker="o", linewidth=1, label="Response 2")
-    plt.plot(out["input_v"], out["amp3_peak"], marker="o", linewidth=1, label="Response 3")
-    plt.plot(out["input_v"], out["amp4_peak"], marker="o", linewidth=1, label="Response 4")
+    plt.plot(out["input_b_mT"], out["amp1_peak"], marker="o", linewidth=1, label="Raw Output (Single Sensor)")
+    plt.plot(out["input_b_mT"], out["amp2_peak"], marker="o", linewidth=1, label="Time Averaged (Single Sensor)")
+    plt.plot(out["input_b_mT"], out["amp3_peak"], marker="o", linewidth=1, label="Spatial Average (Four Sensors)")
+    plt.plot(out["input_b_mT"], out["amp4_peak"], marker="o", linewidth=1, label="Combined Average (Four Sensors)")
 
     plt.xscale("log")
-    plt.xlabel("Injected Amplitude (V)")
+    plt.xlabel("Magnetic Flux Density (mT)")
     plt.yscale("log")
     plt.ylabel("Measured Peak Amplitude (ADC counts)")
-    plt.title(f"Measured Amplitude vs Injected Amplitude @ {args.freq:g} Hz (Coherent Fit)")
+    plt.title(
+        f"Measured Amplitude vs Magnetic Flux Density @ {FREQ_HZ:g} Hz (Coherent Fit)\n"
+        f"B[mT] = {b_slope:.5g}*V + {b_intercept:.5g} (R^2={b_r2:.4f}) (Measured linear fit)"
+    )
     plt.grid(True, which="both")
     plt.legend()
     plt.tight_layout()
 
-    out_png_path = os.path.join(args.folder, args.out_png)
+    out_png_path = os.path.join(FOLDER, OUT_PNG)
     plt.savefig(out_png_path, dpi=300)
     plt.close()
 
@@ -285,6 +344,7 @@ def main() -> int:
     print("Wrote:", out_csv_path)
     print("Wrote:", out_qc_csv_path)
     print("Wrote:", out_png_path)
+    print(f"Voltage->B fit: B[mT] = {b_slope:.6g}*V + {b_intercept:.6g} (R^2={b_r2:.6f})")
     return 0
 
 

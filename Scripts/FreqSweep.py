@@ -3,26 +3,14 @@
 Batch amplitude extraction from stepped-sine recordings.
 
 Assumptions:
-- Files are named like "0.1Hz.txt", "1.25Hz.txt", etc. (case-insensitive).
-- Each file has at least 4 signal columns (we use the first 4).
-- If a timestamp column exists, it's the LAST column.
-  - If timestamps look like microseconds, they are converted to seconds automatically.
+- Input files can be classic names like "1.25Hz.txt" or split names like "..._1.25_Hz_20_Vpp.csv".
+- Data uses columns (1-based): raw=1, temporal=5, spatial=9, combined=10, timestamp=11.
 - Amplitude is extracted via coherent least-squares fit:
     x(t) ≈ a*sin(2π f t) + b*cos(2π f t)
     A_peak = sqrt(a^2 + b^2)
-
-Outputs:
-- A CSV summary (amplitude_peak per channel vs frequency)
-- A 300 DPI plot PNG
-
-Usage:
-  python sweep_amp.py --folder /path/to/folder
-  python sweep_amp.py --folder . --pattern "*.txt"
-  python sweep_amp.py --folder . --fs 60     # only needed if files have NO timestamp column
 """
 
 from __future__ import annotations
-import argparse
 import glob
 import os
 import re
@@ -38,20 +26,46 @@ except ImportError:  # scipy is optional
     _scipy_welch = None
 
 
-FREQ_RE = re.compile(r"(?P<f>\d+(?:\.\d+)?)\s*hz", re.IGNORECASE)
+FREQ_SPLIT_RE = re.compile(r"_(?P<f>\d+(?:\.\d+)?)_hz(?:_|\.|$)", re.IGNORECASE)
+FREQ_RE = re.compile(r"(?P<f>\d+(?:\.\d+)?)(?:[\s_]*hz)(?=$|[^a-z0-9])", re.IGNORECASE)
+
+# Config
+FOLDER = "Scripts/Plot Data/Frequency Sweep/Split"
+PATTERN = "*.csv"
+SIGNAL_COLS_1B = [1, 5, 9, 10]
+TIME_COL_1B = 11
+FS_FALLBACK: Optional[float] = None
+EXPECTED_COLS: Optional[int] = None
+MAX_REL_JUMP = 0.5
+NOISE_BW_HZ = 1.0
+WELCH_NPERSEG = 1024
+DISCARD_FRAC = 0.0
+OUT_CSV = "amplitude_summary_vs_frequency.csv"
+OUT_QC_CSV = "row_qc_summary_vs_frequency.csv"
+OUT_SNR_CSV = "snr_summary_vs_frequency.csv"
+OUT_SNR_PNG = "snr_vs_frequency.png"
+OUT_PNG = "amplitude_vs_frequency.png"
 
 
 def parse_freq_hz_from_filename(path: str) -> Optional[float]:
     base = os.path.basename(path)
-    m = FREQ_RE.search(base)
+    m = FREQ_SPLIT_RE.search(base)
+    if not m:
+        m = FREQ_RE.search(base)
     if not m:
         return None
     return float(m.group("f"))
 
 
-def load_table(path: str, expected_cols: int = 5, max_rel_jump: float = 0.5) -> Tuple[np.ndarray, Dict[str, int]]:
+def load_table(
+    path: str,
+    selected_cols: List[int],
+    expected_cols: Optional[int] = None,
+    max_rel_jump: float = 0.5,
+) -> Tuple[np.ndarray, Dict[str, int]]:
     rows: List[List[float]] = []
     prev_row: Optional[List[float]] = None
+    max_col = max(selected_cols) if selected_cols else -1
 
     n_short = 0
     n_long = 0
@@ -61,10 +75,6 @@ def load_table(path: str, expected_cols: int = 5, max_rel_jump: float = 0.5) -> 
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         lines = f.readlines()
 
-    # Recordings often have short metadata/footer blocks.
-    if len(lines) > 8:
-        lines = lines[4:-4]
-
     for line in lines:
         s = line.strip()
         if not s:
@@ -72,22 +82,29 @@ def load_table(path: str, expected_cols: int = 5, max_rel_jump: float = 0.5) -> 
 
         fields = [v.strip() for v in s.split(",")] if "," in s else s.split()
         fields = [v for v in fields if v]
-        if len(fields) < expected_cols:
-            n_short += 1
-            continue
-        if len(fields) > expected_cols:
-            n_long += 1
-            continue
+        if expected_cols is not None:
+            if len(fields) < expected_cols:
+                n_short += 1
+                continue
+            if len(fields) > expected_cols:
+                n_long += 1
+                continue
 
         try:
-            row = [float(fields[i]) for i in range(expected_cols)]
+            row_all = [float(v) for v in fields]
         except ValueError:
             n_non_numeric += 1
             continue
 
+        if len(row_all) <= max_col:
+            n_short += 1
+            continue
+
+        row = [row_all[i] for i in selected_cols]
+
         if prev_row is not None:
             bad_jump = False
-            for i in range(expected_cols):
+            for i in range(len(row)):
                 denom = max(abs(prev_row[i]), 1.0)
                 rel_delta = abs(row[i] - prev_row[i]) / denom
                 if rel_delta > max_rel_jump:
@@ -278,29 +295,17 @@ def band_rms_from_psd(freqs: np.ndarray, psd: np.ndarray, f_lo: float, f_hi: flo
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--folder", required=True, help="Folder containing recordings like 0.1Hz.txt")
-    ap.add_argument("--pattern", default="*.txt", help="Glob pattern inside folder (default: *.txt)")
-    ap.add_argument("--fs", type=float, default=None, help="Fallback sample rate (Hz) if no timestamp column.")
-    ap.add_argument("--expected_cols", type=int, default=5,
-                    help="Expected column count. Rows not matching are dropped (default: 5).")
-    ap.add_argument("--max_rel_jump", type=float, default=0.5,
-                    help="Row is dropped if any value changes by > this fraction vs previous accepted row.")
-    ap.add_argument("--noise_bw_hz", type=float, default=1.0,
-                    help="Noise integration bandwidth (Hz), centered on injected f (default: 1.0).")
-    ap.add_argument("--welch_nperseg", type=int, default=1024, help="Welch nperseg for noise PSD (default: 1024).")
-    ap.add_argument("--discard_frac", type=float, default=0.0,
-                    help="Optionally discard first fraction of each file (e.g., 0.25 to drop first 25%%).")
-    ap.add_argument("--out_csv", default="amplitude_summary.csv", help="Output CSV filename")
-    ap.add_argument("--out_qc_csv", default="row_qc_summary.csv", help="Output QC CSV filename")
-    ap.add_argument("--out_snr_csv", default="snr_summary.csv", help="Output SNR CSV filename")
-    ap.add_argument("--out_snr_png", default="snr_vs_frequency.png", help="Output SNR plot filename (PNG)")
-    ap.add_argument("--out_png", default="amplitude_vs_frequency.png", help="Output plot filename (PNG)")
-    args = ap.parse_args()
+    if TIME_COL_1B < 1:
+        raise SystemExit("TIME_COL_1B must be >= 1")
+    if any(c < 1 for c in SIGNAL_COLS_1B):
+        raise SystemExit("SIGNAL_COLS_1B values must be >= 1")
+    signal_cols_0b = [c - 1 for c in SIGNAL_COLS_1B]
+    time_col_0b = TIME_COL_1B - 1
+    selected_cols = [*signal_cols_0b, time_col_0b]
 
-    files = sorted(glob.glob(os.path.join(args.folder, args.pattern)))
+    files = sorted(glob.glob(os.path.join(FOLDER, PATTERN)))
     if not files:
-        raise SystemExit(f"No files matched: {os.path.join(args.folder, args.pattern)}")
+        raise SystemExit(f"No files matched: {os.path.join(FOLDER, PATTERN)}")
 
     rows = []
     skipped = []
@@ -313,13 +318,18 @@ def main() -> int:
             skipped.append(os.path.basename(path))
             continue
 
-        arr, qc = load_table(path, expected_cols=args.expected_cols, max_rel_jump=args.max_rel_jump)
+        arr, qc = load_table(
+            path,
+            selected_cols=selected_cols,
+            expected_cols=EXPECTED_COLS,
+            max_rel_jump=MAX_REL_JUMP,
+        )
         qc_by_file[os.path.basename(path)] = qc
-        t, sig = infer_time_seconds(arr, args.fs)
+        t, sig = infer_time_seconds(arr, FS_FALLBACK)
 
         # Optional discard of early portion (settling)
-        if args.discard_frac > 0:
-            n0 = int(len(t) * args.discard_frac)
+        if DISCARD_FRAC > 0:
+            n0 = int(len(t) * DISCARD_FRAC)
             t = t[n0:] - t[n0]
             sig = sig[n0:, :]
 
@@ -331,9 +341,9 @@ def main() -> int:
         rows.append([f_hz, *amps])
 
         fs_est = estimate_fs_hz(t)
-        if np.isfinite(fs_est) and fs_est > 0 and np.isfinite(args.noise_bw_hz) and args.noise_bw_hz > 0:
+        if np.isfinite(fs_est) and fs_est > 0 and np.isfinite(NOISE_BW_HZ) and NOISE_BW_HZ > 0:
             nyq = 0.5 * fs_est
-            bw = float(args.noise_bw_hz)
+            bw = float(NOISE_BW_HZ)
             f_lo = max(0.0, f_hz - 0.5 * bw)
             f_hi = min(nyq, f_hz + 0.5 * bw)
         else:
@@ -346,7 +356,7 @@ def main() -> int:
             try:
                 amp_peak, resid = coherent_amp_peak_and_residual(t, sig[:, ch], f_hz)
                 if np.isfinite(f_lo) and np.isfinite(f_hi) and f_hi > f_lo and np.isfinite(fs_est) and fs_est > 0:
-                    nperseg = int(min(max(16, args.welch_nperseg), resid.size))
+                    nperseg = int(min(max(16, WELCH_NPERSEG), resid.size))
                     noverlap = int(nperseg // 2)
                     freqs, psd = welch_psd(resid, fs=fs_est, nperseg=nperseg, noverlap=noverlap)
                     noise_rms = band_rms_from_psd(freqs, psd, f_lo, f_hi)
@@ -372,7 +382,7 @@ def main() -> int:
     rows.sort(key=lambda r: r[0])
     out = pd.DataFrame(rows, columns=["freq_hz", "amp1_peak", "amp2_peak", "amp3_peak", "amp4_peak"])
 
-    out_csv_path = os.path.join(args.folder, args.out_csv)
+    out_csv_path = os.path.join(FOLDER, OUT_CSV)
     out.to_csv(out_csv_path, index=False)
 
     qc_rows = []
@@ -395,47 +405,48 @@ def main() -> int:
         )
 
     qc_df = pd.DataFrame(qc_rows)
-    out_qc_csv_path = os.path.join(args.folder, args.out_qc_csv)
+    out_qc_csv_path = os.path.join(FOLDER, OUT_QC_CSV)
     qc_df.to_csv(out_qc_csv_path, index=False)
 
     snr_out = pd.DataFrame(snr_rows).sort_values("freq_hz")
-    out_snr_csv_path = os.path.join(args.folder, args.out_snr_csv)
+    out_snr_csv_path = os.path.join(FOLDER, OUT_SNR_CSV)
     snr_out.to_csv(out_snr_csv_path, index=False)
 
     # Plot
     plt.figure(figsize=(8, 6), dpi=300)
-    plt.plot(out["freq_hz"], out["amp1_peak"], marker="o", linewidth=1, label="Response 1")
-    plt.plot(out["freq_hz"], out["amp2_peak"], marker="o", linewidth=1, label="Response 2")
-    plt.plot(out["freq_hz"], out["amp3_peak"], marker="o", linewidth=1, label="Response 3")
-    plt.plot(out["freq_hz"], out["amp4_peak"], marker="o", linewidth=1, label="Response 4")
+    plt.plot(out["freq_hz"], out["amp1_peak"], marker="o", linewidth=1, label="Raw Output (Single Sensor)")
+    plt.plot(out["freq_hz"], out["amp2_peak"], marker="o", linewidth=1, label="Temporal Average (Single Sensor)")
+    plt.plot(out["freq_hz"], out["amp3_peak"], marker="o", linewidth=1, label="Spatial Average (Four Sensors)")
+    plt.plot(out["freq_hz"], out["amp4_peak"], marker="o", linewidth=1, label="Combined Average (Four Sensors)")
+
 
     plt.xscale("log")
-    plt.xlabel("Injected Frequency (Hz)")
+    plt.xlabel("Signal Frequency (Hz)")
     plt.ylabel("Peak Amplitude (ADC counts)")
     plt.title("Extracted Amplitude vs Frequency (Coherent Fit)")
     plt.grid(True, which="both")
     plt.legend()
     plt.tight_layout()
 
-    out_png_path = os.path.join(args.folder, args.out_png)
+    out_png_path = os.path.join(FOLDER, OUT_PNG)
     plt.savefig(out_png_path, dpi=300)
     plt.close()
 
     # Plot SNR (tone RMS vs in-band noise RMS)
     plt.figure(figsize=(8, 6), dpi=300)
-    plt.plot(snr_out["freq_hz"], snr_out["snr1_db"], marker="o", linewidth=1, label="Response 1")
-    plt.plot(snr_out["freq_hz"], snr_out["snr2_db"], marker="o", linewidth=1, label="Response 2")
-    plt.plot(snr_out["freq_hz"], snr_out["snr3_db"], marker="o", linewidth=1, label="Response 3")
-    plt.plot(snr_out["freq_hz"], snr_out["snr4_db"], marker="o", linewidth=1, label="Response 4")
+    plt.plot(snr_out["freq_hz"], snr_out["snr1_db"], marker="o", linewidth=1, label="Raw Output (Single Sensor)")
+    plt.plot(snr_out["freq_hz"], snr_out["snr2_db"], marker="o", linewidth=1, label="Temporal Average (Single Sensor)")
+    plt.plot(snr_out["freq_hz"], snr_out["snr3_db"], marker="o", linewidth=1, label="Spatial Average (Four Sensors)")
+    plt.plot(snr_out["freq_hz"], snr_out["snr4_db"], marker="o", linewidth=1, label="Combined Average (Four Sensors)")
     plt.xscale("log")
-    plt.xlabel("Injected Frequency (Hz)")
+    plt.xlabel("Signal Frequency (Hz)")
     plt.ylabel("SNR (dB) in Noise Band")
-    plt.title(f"SNR vs Frequency (Noise BW={args.noise_bw_hz:g} Hz)")
+    plt.title(f"SNR vs Frequency (Noise BW={NOISE_BW_HZ:g} Hz)")
     plt.grid(True, which="both")
     plt.legend()
     plt.tight_layout()
 
-    out_snr_png_path = os.path.join(args.folder, args.out_snr_png)
+    out_snr_png_path = os.path.join(FOLDER, OUT_SNR_PNG)
     plt.savefig(out_snr_png_path, dpi=300)
     plt.close()
 

@@ -10,7 +10,7 @@
 #define MODE_NCC_VEL 1
 #define MODE_AVG 2
 #define MODE_SIMPLE_VEL 3
-#define ARRAY_MODE MODE_SIMPLE_VEL
+#define ARRAY_MODE MODE_AVG
 #define ALPHA 256         // Baseline update factor, ALPHA/1024
 #define ALPHA_V 0.01     // Velocity Avg baseline update
 #define HISTORY_LENGTH 2 // Number of historical frames for frame shifting
@@ -489,68 +489,68 @@ void vel_task(__unused void *params) {
 
 // Magnetic Array Ensemble Averaging
 void avg_task(void* params){
-    uint32_t raw;
+    uint16_t oversample = 64;           // Oversamples per frame
+    uint8_t sensors[4] = {2, 8, 3, 9};  // 0 index, NOT board index
+    uint8_t n = sizeof(sensors);
     uint32_t spatial;
-    uint32_t temporal;
     uint32_t combined;
-    uint32_t comb_avg;
-    uint64_t temp;
     uint64_t start;
-    uint64_t frame_time;
-
-    uint16_t frame[36];
-    uint32_t s_frame[36];
+    uint32_t frame[36] = {0};
+    uint32_t s_frame[36] = {0};
 
     while(1){
         // Update readings
+        memset(s_frame, 0, sizeof(s_frame[0]));
         start = time_us_64();
-        get_frame(frame);           // Raw frame (12 bit)
-        super_frame(s_frame, 64);   // Super sampled frame (32 bit)
-        raw = ((uint32_t)frame[34]) << 20;  // Sensor 35
 
-        // Compute spatial average
-        // for(int i = 0; i < 36; i++){
-        //     temp += (uint64_t)(((uint32_t)frame[i]) << 20);
-        // }
-        // spatial = (uint32_t)(temp/36);
+        uint16_t raw[36] = {0};
+        for (int i = 0; i < oversample; i++){
+            get_frame(raw);
+            for (int j = 0; j < 36; j++){
+                s_frame[j] += (uint32_t)raw[j];
+                if (i == 0) frame[j] = (uint32_t)raw[j] << 20;   // Q20
+            }
+        }
 
-        // Four Sensor Spatial Average
+        // Per Sensor Time Average
+        for (int i = 0; i < 36; i++){
+            s_frame[i] = (uint32_t)(((uint64_t)s_frame[i] / (uint64_t)oversample) << 20);   // Q20
+        }
+
+        // n Sensor Spatial Average
+        uint64_t temp = 0;
+        for (int i = 0; i < n; i++){
+            temp += (uint64_t)((uint32_t)frame[sensors[i]]);
+        }
+        spatial = (uint32_t)(temp / n);
+
+        // n Sensor Combined Average
         temp = 0;
-        temp += (uint64_t)(((uint32_t)frame[34]) << 20);    // 35
-        temp += (uint64_t)(((uint32_t)frame[35]) << 20);    // 36
-        temp += (uint64_t)(((uint32_t)frame[28]) << 20);    // 29
-        temp += (uint64_t)(((uint32_t)frame[29]) << 20);    // 30
-        spatial = (uint32_t)(temp / 4);
+        for (int i = 0; i < n; i++){
+            temp += (uint64_t)((uint32_t)s_frame[sensors[i]]);
+        }
+        combined = (uint32_t)(temp / n);
 
-        // Read temporal average
-        temporal = s_frame[35];
+        // Print results
+        for (int i = 0; i < n; i++){    // Raw
+            tud_printf("%lu, ", frame[sensors[i]]);
+        }
 
-        // Sum combined average
-        // temp = 0;
-        // for(int i = 0; i < 36; i++){
-        //     temp += (uint64_t)s_frame[i];
-        // }
-        // combined = (uint32_t)(temp/36);
+        for (int i = 0; i < n; i++){    // Temporal
+            tud_printf("%lu, ", s_frame[sensors[i]]);
+        }
 
-        // Four Sensor combined average
-        temp = 0;
-        temp += (uint64_t)(s_frame[34]);    // 35
-        temp += (uint64_t)(s_frame[35]);    // 36
-        temp += (uint64_t)(s_frame[28]);    // 29
-        temp += (uint64_t)(s_frame[29]);    // 30
-        combined = (uint32_t)(temp / 4);
-
-        // Send results
-        tud_printf("%u, %u, %u, %u, %llu\n", raw, spatial, temporal, combined, time_us_64());
-        frame_time = time_us_64() - start;
-        // vTaskDelay(pdMS_TO_TICKS(FRAME_DELAY_MS - (frame_time / 1000)));
+        tud_printf("%lu, ", spatial);   // Spatial
+        
+        tud_printf("%lu, ", combined);  // Combined
+        tud_printf("%llu\n", start);    // Timestamp    
+        taskYIELD();
     }
 }
 
 int main(void)
 {
     stdio_init_all();
-    // cyw43_arch_init();
     tusb_init();
     spi_init_adc_bus();
 
