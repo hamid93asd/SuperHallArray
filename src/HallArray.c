@@ -2,6 +2,8 @@
 // Cubby DeBry 2025
 #include "HallArray.h"
 
+#include "usb.h"
+
 #define BUFFER_SIZE 16
 #define FPS 60
 #define FRAME_DELAY_MS (1000 / FPS)
@@ -71,41 +73,6 @@ void spi_init_adc_bus(void){
     }
 }
 
-// Send a fram of data over USB CDC in binary format
-void send_frame_binary(uint16_t* frame) {
-    static const uint8_t sync[4] = {0xAA, 0x55, 0xAA, 0x55};
-    if (!tud_cdc_connected()) return; // optional
-
-    tud_cdc_write(sync, 4);
-    tud_cdc_write(frame, 36 * sizeof(uint16_t));
-    tud_cdc_write_flush();
-}
-
-void tud_printf(const char* format, ...){
-    char buffer[128];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
-    va_end(args);
-
-    while(tud_cdc_write_available() < strlen(buffer)){
-        tud_cdc_write_flush();
-        vTaskDelay(1);
-    }
-
-    tud_cdc_write_str(buffer);
-    tud_cdc_write_flush();
-}
-
-// Send a frame over CDC in CSV format for debugging
-void send_frame_csv(uint16_t* frame){
-    tud_printf("F");
-    for(int i = 0; i < 36; i++){
-        tud_printf(",%4u", frame[i]);
-    }
-    tud_printf("\n");
-}
-
 // Read two bytes from SPI, write address of next read
 uint16_t spi_transfer16(uint16_t tx){
     uint8_t tx_buf[2] = { (tx >> 8) & 0xFF, tx & 0xFF};
@@ -145,13 +112,6 @@ void super_frame(uint32_t* s_frame, uint8_t n_frames){
 
     for(int i = 0; i < 36; i++){
         s_frame[i] = (uint32_t)((((uint64_t)frame_total[i]) << 20) / n_frames);
-    }
-}
-
-void tud_update_task(void* params){
-    while(1){
-        tud_task();
-        vTaskDelay(1);
     }
 }
 
@@ -551,7 +511,7 @@ void avg_task(void* params){
 int main(void)
 {
     stdio_init_all();
-    tusb_init();
+    usb_init();
     spi_init_adc_bus();
 
     TaskHandle_t readtask;

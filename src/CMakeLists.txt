@@ -3,6 +3,7 @@ add_executable(hall_array
     HallArray.c
     NCC.c
     usb_descriptors.c
+    usb.c
     )
 
 pico_set_program_name(hall_array "test")

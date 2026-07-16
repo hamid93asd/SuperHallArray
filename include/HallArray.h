@@ -1,7 +1,6 @@
 #pragma once
 
 #include <stdio.h>
-#include "tusb.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "pico.h"
