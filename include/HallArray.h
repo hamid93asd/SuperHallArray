@@ -12,4 +12,3 @@
 #include "hardware/gpio.h"
 #include "NCC.h"
 #include "pico/time.h"
-#include "dog.h"

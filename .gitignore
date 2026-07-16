@@ -1,6 +1,9 @@
 Testing
 build
 log
+__pycache__
+Scripts/Plot Data
+Scripts/__pycache__
 .vscode
 
 *.log.*
@@ -8,6 +11,6 @@ log
 *.pid
 *-profile
 *.DS_Store
-Manuscript/*
+Manuscript
 
 
