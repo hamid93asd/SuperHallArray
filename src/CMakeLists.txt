@@ -4,6 +4,8 @@ add_executable(hall_array
     NCC.c
     usb_descriptors.c
     usb.c
+    camera.c
+    velocity.c
     )
 
 pico_set_program_name(hall_array "test")

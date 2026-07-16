@@ -9,6 +9,7 @@ void usb_init(){
     tusb_init();
 }
 
+// Call to update USB task
 void tud_update_task(void* params){
     while(1){
         tud_task();
@@ -16,6 +17,7 @@ void tud_update_task(void* params){
     }
 }
 
+// Tiny USB based printf for printing raw data without formatting issues
 void tud_printf(const char* format, ...){
     char buffer[128];
     va_list args;
@@ -42,7 +44,7 @@ void send_frame_binary(uint16_t* frame) {
     tud_cdc_write_flush();
 }
 
-// Send a frame over CDC in CSV format for debugging
+// Send a frame over USB CDC in CSV format for debugging
 void send_frame_csv(uint16_t* frame){
     tud_printf("F");
     for(int i = 0; i < 36; i++){
