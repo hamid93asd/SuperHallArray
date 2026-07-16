@@ -3,10 +3,10 @@
 
 #define BUFFER_SIZE 16
 
-#define SPI_PORT spi0
-#define PIN_MISO 0
-#define PIN_SCK 2
-#define PIN_MOSI 3
+#define SPI_PORT    spi0
+#define PIN_MISO    0
+#define PIN_SCK     2
+#define PIN_MOSI    3
 
 // Pico GPIO Chip Selects for ADCs
 #define CS1 4
@@ -36,23 +36,27 @@
 uint16_t spi_transfer16(uint16_t tx);
 
 static uint adc_buffer[BUFFER_SIZE];
-static const uint8_t input_ctrl[8] = {IN1, IN2, IN3, IN4, IN5, IN6, IN7, IN0};
-static const uint8_t standard_map[8] = {3, 4, 5, 6, 7, 2, 1, 0};   // Map to physical order
-static const uint8_t short_map[8] = {0, 1, 2, 3, 0, 0, 0, 0};      // For last ADC (only 4 inputs used)
-static const uint8_t channel_ctrl[5] = {CS1, CS2, CS3, CS4, CS5};
+static const uint8_t input_ctrl[8]      = {IN1, IN2, IN3, IN4, IN5, IN6, IN7, IN0};
+static const uint8_t standard_map[8]    = {3, 4, 5, 6, 7, 2, 1, 0};   // Map to physical order
+static const uint8_t short_map[8]       = {0, 1, 2, 3, 0, 0, 0, 0};      // For last ADC (only 4 inputs used)
+static const uint8_t channel_ctrl[5]    = {CS1, CS2, CS3, CS4, CS5};
 
 // Get a single frame of 36 sensors
 void get_frame(uint16_t* frame){
+
     const uint8_t (*map)[8];
 
     for(int i = 0; i < 5; i++){
-        map = (i == 4) ? &short_map : &standard_map;
-        gpio_put(channel_ctrl[i], 0);   // Activate ADC
+
+        map = (i == 4) ? &short_map : &standard_map;    // ADCs 1-4 and 5 have different mappings
+        gpio_put(channel_ctrl[i], 0);                   // Activate ADC
+
         for(int j = 0; j < ((i == 4) ? 4 : 8); j++){
             uint16_t raw = spi_transfer16((uint16_t)input_ctrl[j] << 8);    // Read input, request next, map to physical order
             uint8_t mapped_idx = i*8 + (*map)[j];
             frame[mapped_idx] = raw;
         }
+
         gpio_put(channel_ctrl[i], 1);   // Deactivate ADC
     }
 }
@@ -95,7 +99,6 @@ void cam_task(void* params){
         #endif
 
         vTaskDelay(pdMS_TO_TICKS(FRAME_DELAY_MS));  // This still needs timing, should be delay FRAME_DELAY_MS minus frame read time
-        // cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, toggle);
         toggle = !toggle;
     }
 }
@@ -107,7 +110,7 @@ void spi_init_adc_bus(void){
 
     gpio_set_function(PIN_MISO, GPIO_FUNC_SPI);
     gpio_set_function(PIN_MOSI, GPIO_FUNC_SPI);
-    gpio_set_function(PIN_SCK, GPIO_FUNC_SPI);
+    gpio_set_function(PIN_SCK,  GPIO_FUNC_SPI);
 
     for (int i = 0; i < 5; i++){
         gpio_init(channel_ctrl[i]);

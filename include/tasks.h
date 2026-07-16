@@ -13,5 +13,4 @@ void get_frame(uint16_t* frame);
 void super_frame(uint32_t* s_frame, uint8_t n_frames);
 
 void avg_task(void* params);
-void simple_vel_task(__unused void *params);
 void vel_task(__unused void *params);

@@ -7,7 +7,5 @@
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "pico/cyw43_arch.h"
-
-
 #include "NCC.h"
 #include "pico/time.h"
