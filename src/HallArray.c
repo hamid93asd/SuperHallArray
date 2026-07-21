@@ -1,20 +1,20 @@
 // HallArray.c 
 // Cubby DeBry 2025
 
-#define DEBUG_MODE 0    // 0 = Binary output, 1 = CSV debug output
-
-#define MODE_CAMERA 0
-#define MODE_NCC_VEL 1
-#define MODE_AVG 2
+#define MODE_CAMERA     0
+#define MODE_NCC_VEL    1
+#define MODE_AVG        2
 #define MODE_SIMPLE_VEL 3
-#define ARRAY_MODE MODE_AVG
+#define ARRAY_MODE      MODE_CAMERA
+
+#define DEBUG_MODE      0    // 0 = Binary output, 1 = CSV debug output (Velocity mode only)
 
 #include "HallArray.h"
 #include "usb.h"
 #include "tasks.h"
 
 int main(void){
-    
+
     stdio_init_all();
     usb_init();
     spi_init_adc_bus();
