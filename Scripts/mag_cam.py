@@ -8,7 +8,7 @@ import pyqtgraph as pg
 from time import time
 from scipy.ndimage import gaussian_filter, uniform_filter
 
-PORT = '/dev/tty.usbmodemPICO1'  # Serial port for Pico
+PORT = '/dev/ttyACM0'  # Serial port for Pico
 BAUD = 921600                   # Baud rate
 ROWS = 6
 COLS = 6
