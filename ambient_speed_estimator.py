@@ -138,6 +138,5 @@ timer.timeout.connect(update)
 timer.start(10)
 
 if __name__ == '__main__':
-
     print("Gathering static baseline... Keep array still and magnet away.")
     sys.exit(app.exec())
