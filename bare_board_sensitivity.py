@@ -14,6 +14,11 @@ PAYLOAD_SIZE = NUM_CHANNELS * 2
 FRAMES_TO_RECORD = 1000
 QUANTIZATION_UT = 10.25  # microtesla per count
 
+# --- ADC VOLTAGE SETTINGS ---
+V_REF = 3.3  # Change to 5.0 if your microcontroller uses 5V logic
+BIT_RESOLUTION = 16
+TOTAL_LEVELS = 2 ** BIT_RESOLUTION
+
 def run_noise_test():
     try:
         ser = serial.Serial(PORT, BAUDRATE, timeout=1)
@@ -68,14 +73,18 @@ def run_noise_test():
     min_detectable_counts = 3 * system_noise_sigma
     min_detectable_ut = min_detectable_counts * QUANTIZATION_UT
     
-    print("\n" + "="*50)
-    print("      BARE BOARD SENSITIVITY REPORT")
-    print("="*50)
-    print(f"System RMS Noise (1-Sigma):    {system_noise_sigma:.3f} counts")
-    print(f"Detection Threshold (3-Sigma): {min_detectable_counts:.3f} counts")
-    print("-" * 50)
+    # 6. Voltage Conversions
+    noise_voltage = system_noise_sigma * (V_REF / TOTAL_LEVELS)
+    threshold_voltage = min_detectable_counts * (V_REF / TOTAL_LEVELS)
+    
+    print("\n" + "="*65)
+    print("      BARE BOARD SENSITIVITY REPORT (VOLTAGE ENABLED)")
+    print("="*65)
+    print(f"System RMS Noise (1-Sigma):    {system_noise_sigma:.3f} counts ({noise_voltage:.6f} V)")
+    print(f"Detection Threshold (3-Sigma): {min_detectable_counts:.3f} counts ({threshold_voltage:.6f} V)")
+    print("-" * 65)
     print(f"Minimum Detectable Field:      {min_detectable_ut:.2f} µT")
-    print("="*50)
+    print("="*65)
 
 if __name__ == '__main__':
     run_noise_test()
