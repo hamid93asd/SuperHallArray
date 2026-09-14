@@ -1,0 +1,16 @@
+{
+  "created_utc": "2026-09-14T03:36:14.376276+00:00",
+  "port": "/dev/ttyACM0",
+  "baudrate": 921600,
+  "requested_duration_s": 300,
+  "actual_capture_elapsed_s": 300.02630867900007,
+  "number_of_frames": 10000,
+  "number_of_channels": 36,
+  "measured_output_frame_rate_hz": 33.33362794750948,
+  "psd_sample_rate_hz": 33.33362794750948,
+  "sample_rate_source": "estimated from host arrival time",
+  "volts_per_adc_count": 0.001220703125,
+  "host_filtering": "none",
+  "baseline_subtracted": false,
+  "firmware_note": "Current camera firmware averages 64 ADC scans per transmitted frame."
+}

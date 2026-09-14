@@ -1,0 +1,141 @@
+HALL-ARRAY NATURAL-VOLTAGE AND PSD MEASUREMENT REPORT
+6 x 6 (36-pad) array
+=====================================================
+
+Purpose
+-------
+
+This report documents the latest five-minute acquisition and spectral
+analysis of the 36 Hall-array outputs. All results use the board's natural,
+unsubtracted output voltage. The original timeseries_ambient.py file was not
+modified.
+
+
+Acquisition and voltage scaling
+-------------------------------
+
+The latest run was acquired on 2026-09-14. It recorded 10,000 transmitted
+frames from 36 pads over 300.026 s. The received Q4 ADC values were converted
+to voltage using
+
+    V_out = (received value / 16) x (5.0 V / 4096).
+
+Thus one ADC count corresponds to 1.220703 mV. The capture contained no
+host-side moving average, smoothing, filtering, baseline subtraction,
+windowing, or Welch/segment averaging. The existing firmware does form each
+transmitted frame by averaging 64 ADC scans (super_frame(frame, 64)); this is
+device-side processing and remains part of the acquired signal.
+
+The natural voltages in this run range from 2.467880 to 2.518082 V across all
+samples and pads. The overall mean is 2.494324 V. Pad time-mean voltages range
+from 2.469579 to 2.516478 V. The typical within-pad standard deviation is
+approximately 0.497 mV (range: 0.455 to 0.598 mV).
+
+The approximately 2.5 V value was not inserted as a constant and was not
+subtracted. It is the measured DC level: it comes from applying the above ADC
+conversion to the recorded samples and taking their time mean. The spatial
+ensemble average has the same time mean, 2.494324 V.
+
+
+Time and frequency axes
+-----------------------
+
+The frame rate was estimated from the host arrival timestamps because the
+frames do not contain device timestamps:
+
+    f_s = (N - 1) / (t_last - t_first) = 33.333628 Hz.
+
+For the FFT, samples are placed on a uniform time axis with spacing 1/f_s.
+With N = 10,000 samples, the frequency assigned to FFT bin k is
+
+    f_k = k f_s / N.
+
+Therefore the frequency resolution is 0.003333363 Hz per bin and the highest
+resolvable frequency (Nyquist frequency) is 16.666814 Hz. The frequency axis
+in the PSD CSV/NPZ files is generated from this expression.
+
+
+Time-domain and ensemble results
+--------------------------------
+
+natural_voltage_all_36_pads_timeseries.png overlays the 36 natural-voltage
+traces for the full five-minute record. The traces are stable near 2.5 V, with
+pad-to-pad DC offsets and millivolt-scale temporal variation.
+
+The ensemble time series is calculated at every recorded time point as
+
+    V_ensemble(t) = (1/36) sum_i V_i(t).
+
+It is an equal-weight spatial average across pads, not an average across time.
+Its standard deviation in this run is 0.041 mV; averaging reduces pad-specific
+uncorrelated variation while retaining the common DC level.
+
+
+PSD method and interpretation
+-----------------------------
+
+For each pad, and separately for the ensemble time series, the notebook uses
+one FFT of the complete natural-voltage record. The one-sided periodogram is
+
+    PSD(f_k) = |FFT[V_out](f_k)|^2 / (f_s N),
+
+with non-DC, non-Nyquist positive-frequency bins multiplied by two. The unit
+is V^2/Hz. It is a power-density measurement, not the instantaneous voltage
+at that frequency.
+
+The large DC component is expected. A stable voltage near 2.5 V has frequency
+zero: it does not oscillate. Consequently its energy is concentrated in the
+0-Hz FFT bin. For this record, the ensemble DC PSD is 1866.48 V^2/Hz. This
+value follows directly from the measured mean voltage:
+
+    PSD(0) = N x mean(V_out)^2 / f_s.
+
+The spike is therefore the natural sensor/electronics DC output represented
+in one narrow FFT bin; it is not evidence of a 0-Hz noise fault. The remaining
+low-frequency bins can contain slow board/supply/ambient changes and finite-
+record spectral leakage. The single-FFT periodogram also has inherent
+bin-to-bin variance.
+
+The ensemble PSD has a much lower non-DC floor than the individual-pad PSD,
+because spatial averaging suppresses variation that is not shared by all pads.
+It does not remove a common DC voltage or common-mode low-frequency behavior.
+
+
+Saved outputs
+-------------
+
+The run directory is hall_array_output/20260914T033112Z/.
+
+    hall_array_5min_unfiltered.csv/.npz
+        Time-domain natural voltage for all 36 pads.
+    natural_voltage_all_36_pads_timeseries.png
+        Overlay of the 36 natural-voltage time series.
+    voltage_out_36_pads_5min.png
+        Individual natural-voltage time-series panels.
+    ensemble_average_36_pads.csv/.npz/.png
+        Spatial ensemble-average voltage versus time.
+    psd_36_pads.csv/.npz
+        Full one-sided PSD arrays, including the 0-Hz DC bin, for all pads.
+    ensemble_average_psd.csv/.npz
+        Full one-sided PSD array, including the 0-Hz DC bin, for the ensemble.
+    psd_36_pads.png and ensemble_average_psd.png
+        PSD displays of the non-DC region.
+    metadata.json
+        Capture settings and processing metadata.
+
+Important display note: the PSD CSV and NPZ files retain every bin, including
+0 Hz. To make the much smaller non-DC spectrum visible, the two PNG PSD plots
+start at array index 10 (0.0333336 Hz) and do not display the first ten bins.
+Thus the numerical files and plots use the same PSD calculation and units, but
+the plots intentionally omit the DC/very-low-frequency bins for readability.
+
+
+Conclusion
+----------
+
+The present data set provides unfiltered natural-voltage time series, a
+36-pad spatial ensemble average, and one-sided PSDs in V^2/Hz. The prominent
+zero-frequency component is the measured approximately 2.5 V DC operating
+level. The non-DC PSD region is the appropriate portion for evaluating
+voltage variation versus frequency; retaining the DC bin in the numerical
+files preserves the complete natural-voltage measurement.
