@@ -15,7 +15,7 @@ FRAMES_TO_RECORD = 1000
 QUANTIZATION_UT = 10.25  # microtesla per count
 
 # --- ADC VOLTAGE SETTINGS ---
-V_REF = 3.3  # Change to 5.0 if your microcontroller uses 5V logic
+V_REF = 5  # Change to 5.0 if your microcontroller uses 5V logic
 BIT_RESOLUTION = 16
 TOTAL_LEVELS = 2 ** BIT_RESOLUTION
 
